@@ -96,20 +96,15 @@ colours.taxon <- c(
 
 scales::show_col(colours.taxon)
 
-library(ggthemes)
-base_theme <- theme_tufte() + 
-    theme(
-        text = element_text(size=9, family = ""),
-        strip.text = element_text(size=9, family = ""),
-        # axis.text = element_text(size=8, family = ""),
-        legend.position = "none"
-        )
+
+#Source themes
+source('R/themes.R')
 ```
 
 # Read in data & get summary statistics
 
 ```{R read in}
-counts <- read.csv("R_analysis/FILE_for_R_NEW.csv") %>%
+counts <- read_csv("R_analysis/FILE_for_R_NEW.csv") %>%
   janitor::clean_names() %>%
   dplyr::mutate(sample_id = paste0(sample, "_", run),
                 mixture_type = case_when(
@@ -210,7 +205,7 @@ gg.p1 <- joint %>%
   geom_col(position="stack") +
   facet_grid(type~mixture_type, scales="free_x") +
   scale_fill_manual(values = colours.taxon) +
-  #scale_fill_brewer(palette="Paired") + 
+  base_theme +
   theme(axis.text.x = element_text(angle=45, hjust=1),
         legend.position = "bottom") +
   scale_y_continuous(labels = scales::percent) +
@@ -226,7 +221,7 @@ gg.p2 <- joint %>%
   geom_col(position="stack") +
   facet_grid(type~mixture_type, scales="free_x") +
   scale_fill_manual(values = colours.taxon) +
-  #scale_fill_brewer(palette="Paired") + 
+  base_theme +
   theme(axis.text.x = element_text(angle=45, hjust=1),
         legend.position = "bottom") +
   scale_y_continuous(labels = scales::percent) +
@@ -252,10 +247,10 @@ primers <- tribble(
     left_join(.$Rprimer %>% unique() %>% purrr::map(get_binding_position, coi_model, tryrc = TRUE, minscore=8) %>%
     bind_rows() %>%
     rename_all(. %>% paste0("R",.)), by="Rprimer")
-  
+
 # Read in sequences
-seqs <- insect::readFASTA("mock_spp.fa")
-seqnames <- str_remove(names(seqs), "^.*?_") %>%
+seqs <- insect::readFASTA("reference/mock_spp2.fa")
+seqnames <- names(seqs) %>%
   str_replace("Bradysia_near_ocellaris","Bradysia_ocellaris")
 
 #Check for differencess in taxon names
@@ -272,9 +267,9 @@ names(primers.dna) <- c("fwhF2", "fwhR2n", "HexCOIR4")
 seqs <- c(seqs, primers.dna)
 
 # Trim seqs to Fprimer bind region and get primer edit distance
-aligned <- taxreturn::map_to_model(seqs, coi_model, minscore = 6, shave= TRUE, pad=TRUE, check_indels=FALSE, maxNs=Inf, cores=1, quiet=FALSE)
+aligned <- taxreturn::map_to_model(seqs, coi_model, minscore = 0, shave= TRUE, pad=TRUE, check_indels=FALSE, maxNs=Inf, cores=1, quiet=FALSE)
 
-#Transform to DNAstrings
+#Transform to DNAstringSet
 aligned <- aligned %>% as.list %>% as.character %>% lapply(., paste0, collapse = "") %>% 
             unlist %>% DNAStringSet
 
@@ -1188,6 +1183,8 @@ traits <- joint %>%
 # PCA plot of whole composition through process
 
 Recreate process
+
+See CJ batteys spacetree plot for how to plot this: https://github.com/cjbattey/spacetree/blob/master/spacetree.R
 
 ```{r}
 test <- joint %>%
