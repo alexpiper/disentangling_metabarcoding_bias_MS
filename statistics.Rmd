@@ -88,7 +88,7 @@ source("R/helper_functions.R")
 colours.taxon <- c(
   "Acizzia_alternata" = "#A6CEE3",
   "Acizzia_solanicola" = "#438FC0",
-  "Aphidius_colemani" = "#438FC0",
+  "Aphidius_colemani" = "#808080",
   "Bactrocera_tryoni" = "#000000",
   "Bradysia_nr.ocellaris" = "#FFFF00",
   "Carpophilus_davidsoni" = "#9AD378",
@@ -411,14 +411,7 @@ gg.runra <- joint %>%
     theme(axis.text.x = element_text(angle=45, hjust=1),
           legend.position = "bottom") +
     scale_y_continuous(labels = scales::percent) +
-    labs(x="Sample", y="Relative abundance", title="Differences in relative abundances between protocols/runs")
-
-gg.runra
-
-#Write out
-pdf(file="figs/RA_between_runs.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.runra)
-try(dev.off(), silent=TRUE)
+    labs(x="Sample", y="Relative abundance")
 
 # Plot as heatmap
 gg.runhmap <- joint %>%
@@ -438,16 +431,17 @@ gg.runhmap <- joint %>%
     scale_fill_viridis_c(labels = scales::percent) +
     labs(x="Sample",
          y="Taxon",
-         fill="Relative abundance",
-         title="Consistency between runs")
+         fill="Relative abundance")
 
-gg.runhmap
+gg.runcomparison <- gg.runra - gg.runhmap + plot_annotation(tag_levels="A")
+
+gg.runcomparison
 
 #Write out
-pdf(file="figs/heatmap_between_runs.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.runhmap)
+pdf(file="figs/supplementary/run_comparison.pdf", width = 11, height = 8 , paper="a4r")
+  plot(gg.runcomparison)
 try(dev.off(), silent=TRUE)
-
+  
 # Remove the quickextract samples from run 2
 joint <- joint %>%
   dplyr::filter(!(mixture_type=="QuickExtract" & run==2))
@@ -473,7 +467,7 @@ gg.err_prop <- joint %>%
 gg.err_prop
 
 #Write out
-pdf(file="figs/err_proportions.pdf", width = 11, height = 8 , paper="a4r")
+pdf(file="figs/supplementary/err_proportions.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.err_prop)
 try(dev.off(), silent=TRUE)
 
@@ -496,7 +490,7 @@ gg.err_ratio <- joint %>%
 gg.err_ratio
 
 #Save figure
-pdf(file="figs/err_ratio.pdf", width = 11, height = 8 , paper="a4r")
+pdf(file="figs/supplementary/err_ratio.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.err_ratio)
 try(dev.off(), silent=TRUE)
   
@@ -511,7 +505,7 @@ joint %>%
 ```
 
 
-# Estimate bias using different models
+# Compare bias models
 
 We will now estimate the bias using different conventional and CODA models
 
@@ -569,6 +563,7 @@ lm_results <- fit_lm %>%
   ) %>%
     dplyr::select(!where(is.list))
 ```
+
 ## Complm
 
 Estimating bias  is complicated by the compositional nature of metabarcoding measurements. Because only relative abundances are measured, the measurement of a  sample (s) only provides information about the efficiencies of the taxa in the sample relative to each other.
@@ -647,7 +642,7 @@ metacal_results %>%
   rmse(truth = observed, estimate = predicted)
 ```
 
-# Evaluate all model fits
+# Evaluate model fits
 
 Here we compare the accuracy of the bias estimation procedure by looking at the Root Mean Square Error (RMSE) between the observed relative abundances from sequencing, and the predicted relative abundances (Expected * Bias estimate) from each model.
 
@@ -677,7 +672,7 @@ gg.bias_ests <- fits %>%
 gg.bias_ests
 
 #Save figure
-pdf(file="figs/bias_estimates.pdf", width = 8, height = 11 , paper="a4")
+pdf(file="figs/model_comparisons/bias_estimates.pdf", width = 8, height = 11 , paper="a4")
   plot(gg.bias_ests)
 try(dev.off(), silent=TRUE)
 ```
@@ -704,7 +699,7 @@ gg.bias_preds <- fits %>%
 gg.bias_preds
 
 #Save figure
-pdf(file="figs/bias_preds.pdf", width = 11, height = 8 , paper="a4r")
+pdf(file="figs/model_comparisons/bias_preds.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.bias_preds)
 try(dev.off(), silent=TRUE)
 
@@ -728,7 +723,7 @@ gg.rmse <- error %>%
 gg.rmse
 
 #Save figure
-pdf(file="figs/rmse.pdf", width = 11, height = 8 , paper="a4r")
+pdf(file="figs/model_comparisons/rmse.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.rmse)
 try(dev.off(), silent=TRUE)
 ```
@@ -763,7 +758,7 @@ gg.cal <- ggplot(cal, aes(x=taxon, y= odds(calibrated) / odds(exp_individuals), 
 gg.cal
 
 #Save figure
-pdf(file="figs/calibration.pdf", width = 11, height = 8 , paper="a4r")
+pdf(file="figs/model_comparisons/calibration.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.cal)
 try(dev.off(), silent=TRUE)
 
@@ -771,7 +766,7 @@ try(dev.off(), silent=TRUE)
 
 From the above we can see that the metacal and complm models fit the data the best. We will do the rest of the analysis with the complm as the regression framework provides more flexibility
 
-# Partition the bias using complm
+# Fit final model 
 
 We will use bootstrapping to get a best estimate and associated confidence intervals, which will take the form of geometric mean and standard deviations of the bootstrap estimates.
 
@@ -781,7 +776,7 @@ When using geometric SD factor in conjunction with geometric mean, it should be 
 
 Therefore the estimated efficiencies are shown as the best estimate multiplied and divided by two geometric standard errors
 
-```{r Bias partitioning}
+```{r Final model}
 lm_dat <- joint %>%
   filter(exp_individuals > 0) %>%
   group_by(mixture_type, target_subfragment) 
@@ -804,7 +799,10 @@ boot_models <- boots %>%
       mutate(lm_obj = map(splits, ~lm(center_elts(observed0 / exp_individuals) ~ 0 + taxon, data = .)), #why cant i use lm spec here?
             pred = map2(lm_obj, splits, function(.model, .data) predict(.model, .data)),
             coef_info = map(lm_obj, tidy),
-            aug = map(lm_obj, broom::augment) 
+            aug = map(lm_obj, broom::augment),
+            data = map(splits, function(y){
+              as.data.frame(y) %>%
+                dplyr::select(observed, count, mixture_type, sample_id, taxon, exp_individuals)})
         ) 
     }) 
 
@@ -825,6 +823,122 @@ boot_coefs <- boot_models %>%
     dplyr::select(!where(is.list))
 
 
+# Final model fits
+
+# How to get the original data from the bootstraps?
+
+#results
+boot_results <- boot_models%>% 
+  purrr::map(function(x){ 
+    x <- x %>%
+      unnest(pred, data)
+  }) %>%
+  bind_rows(.id="name") %>%
+  tidyr::separate(name, into=c("mixture_type", "target_subfragment"), sep=";") %>%
+  dplyr::filter(exp_individuals > 0)%>% 
+  mutate(
+    predicted = exp_individuals * pred, 
+    estimated = pred
+  ) %>%
+  group_by(sample_id, id) %>%
+  mutate_at(vars(predicted, observed, exp_individuals), ~ . / sum(., na.rm=TRUE) ) %>% #re-close elements
+  dplyr::select(!where(is.list))
+
+# Get RMSE
+final_error <- boot_results %>%
+  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  group_by(target_subfragment, mixture_type) %>%
+  rmse(truth = observed, estimate = predicted) #could also do somethign  else here
+
+# Visualise fits to data
+gg.final_fits <- boot_results %>%
+  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  ggplot(aes(logit(predicted), logit(observed))) +
+  geom_abline(lty = 2, colour = "gray80", size = 1) +
+  geom_rangeframe(colour="black")+
+  geom_text(data=final_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
+ stat_density_2d(geom = "polygon", aes(alpha = ..level.., fill = taxon))+
+  facet_grid(target_subfragment~mixture_type) +
+  scale_fill_manual(values = colours.taxon) +
+  base_theme +
+  theme(panel.grid = element_line(size = rel(1))) +
+  scale_alpha_continuous(range=c(0.3, 0.9))+
+  theme(panel.grid = element_blank(),
+        legend.position = "none")+
+    labs(x = "Bias model prediction (log-odds)", 
+        y = "Observed proportions (log-odds)",
+        colour = "Taxon")+
+  coord_cartesian(xlim = c(-12,3), ylim = c( -12, 3))
+
+## Visualise errors in proportions
+prop_error <- joint %>%
+  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  group_by(target_subfragment, mixture_type) %>%
+  rmse(truth = expected, estimate = observed) #could also do somethign  else here
+
+
+gg.err_prop <- joint%>%
+  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>% 
+  mutate_at(vars(observed, expected, exp_individuals), logit) %>%
+  ggplot(aes(exp_individuals,observed, color = taxon)) + 
+  geom_abline(lty = 2, colour = "gray80", size = 1) +
+  geom_rangeframe(colour="black")+
+  geom_text(data=prop_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
+  geom_point(alpha=0.5) +
+  scale_colour_manual(values = colours.taxon) +
+  facet_grid(target_subfragment~mixture_type) +
+  labs(x = "Expected proportions (log-odds)", 
+       y = "Observed proportions (log-odds)",
+       colour = "Taxon")  +
+  base_theme +
+  theme(panel.grid = element_blank(),
+        legend.position = "none") +
+    facet_grid(target_subfragment~mixture_type) +
+  coord_cartesian(xlim = c(-12,3), ylim = c( -12, 3))
+
+colours.taxon2 <- colours.taxon
+names(colours.taxon2) <- names(colours.taxon) %>% str_replace("_", " ")
+
+gg.final_ests <- boot_coefs  %>%
+    group_by(taxon, target_subfragment, mixture_type) %>%
+    summarise(gm_quantiles(estimate, q = c(0.05, 0.5, 0.95), na_rm=TRUE, wide=TRUE),
+              gm_mean = metacal::gm_mean(estimate, na.rm=TRUE),
+              gm_se = metacal::gm_sd(estimate, na.rm = TRUE)) %>%
+    ungroup %>%
+    mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  mutate(taxon = taxon %>% str_replace("_", " ")) %>%
+  ggplot(aes(x=taxon, y=gm_mean, colour=taxon))+
+  geom_pointrange(aes(ymin = gm_mean / gm_se^2, ymax = gm_mean * gm_se^2),
+        fatten = 3,
+        position = position_dodge(width = 0.5)) +
+    scale_colour_manual(values = colours.taxon2) +
+    geom_hline(yintercept = 1, colour="grey80" )  +
+    scale_y_log10() +
+    geom_rangeframe(color = "black") +
+  base_theme +
+  theme(panel.grid = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(face="italic")) +
+    facet_grid(target_subfragment~mixture_type) +
+  labs(y = "Efficiency / geometric mean",
+       x = "Taxon")
+
+
+Fig1 <- gg.err_prop /  gg.final_fits / gg.final_ests  + plot_annotation(tag_levels = "A")  & theme(plot.margin =unit(c(0,0,0,0), "cm"))
+
+Fig1
+
+#Save figure
+pdf(file="figs/fig1_bias.pdf", width = 8, height = 9 , paper="a4")
+  plot(Fig1)
+try(dev.off(), silent=TRUE)
+
+```
+
+
+# Bias partitioning
+
+```{r Bias partition}
 # Partition the bias in all bootstrap replicates
 boot_partitioned <- boot_coefs %>%
   dplyr::filter(!extract_type=="NA") %>% 
@@ -881,11 +995,6 @@ gg.bias_steps <- bias_steps %>%
 
 gg.bias_steps
 
-#Save figure
-pdf(file="figs/bias_steps.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.bias_steps)
-try(dev.off(), silent=TRUE)
-  
 # Relative abundance trajectories through the workflow
 ra_traj <- bias_steps %>%
     pivot_wider(names_from = step,
