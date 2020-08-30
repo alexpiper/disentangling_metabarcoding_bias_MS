@@ -12,6 +12,6 @@ However RDS files holding intermediate data objects such as the OTU and taxonomy
 
 ## Analysis 
 
-The bioinformatic workflow used to analyse the sequence data can be found in the bioinformatics.rmd file in the root directory or rendered: HERE
+The bioinformatic workflow used to analyse the sequence data can be found in the bioinformatics.rmd file in the root directory or rendered: [Here](https://alexpiper.github.io/metabarcoding_bias_partition/bioinformatics.html)
 
-The statistical analyses can be found in the statistics.rmd file in the root directory or rendered: HERE
+The statistical analyses can be found in the statistics.rmd file in the root directory or rendered: [Here](https://alexpiper.github.io/metabarcoding_bias_partition/statistics.html)
