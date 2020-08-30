@@ -1,14 +1,15 @@
 ---
-title: "bias_partition"
-author: "Alexander Piper"
-date: "19/05/2020"
+title: "Bias Partion Manuscript"
+subtitle: "Statistical analysis"
+author: "A.M. Piper"
+date: "`r Sys.Date()`"
 output: html_document
 editor_options: 
   chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
 ```
 
 # Introduction
@@ -33,12 +34,14 @@ Extra comparisons:
 .cran_packages <- c("tidyverse",
                     "tidymodels",
                     "janitor",
+                    "vip",
                     "patchwork", 
                     "vegan", 
                     "seqinr",
                     "ape", 
                     "RColorBrewer",
-                    "devtools")
+                    "devtools",
+                    "ggthemes")
 .bioc_packages <- c("dada2",
                     "phyloseq", 
                     "DECIPHER",
@@ -59,13 +62,10 @@ sapply(c(.cran_packages,.bioc_packages), require, character.only = TRUE)
 
 # Github packages
 devtools::install_github("mikemc/metacal")
-devtools::install_github("wilkelab/cowplot")
-devtools::install_github("clauswilke/colorblindr")
 devtools::install_github("alexpiper/taxreturn")
+devtools::install_github("r-lib/conflicted")
 
 library(metacal)
-library(cowplot)
-library(colorblindr)
 library(taxreturn)
 
 #Source helper functions
@@ -76,25 +76,23 @@ source("R/helper_functions.R")
 
 ```{r pick colours}
 colours.taxon <- c(
-  "Acizzia_alternata" = "#FFFFFF",
-  "Acizzia_solanicola" = "#C0C0C0",
-  "Aphidius_colemani" = "#808080",
+  "Acizzia_alternata" = "#A6CEE3",
+  "Acizzia_solanicola" = "#438FC0",
+  "Aphidius_colemani" = "#438FC0",
   "Bactrocera_tryoni" = "#000000",
-  "Bradysia_ocellaris" = "#FF0000",
-  "Carpophilus_davidsoni" = "#800000",
-  "Carpophilus_nr_dimidiatus" = "#FFFF00",
-  "Diuraphis_noxia" = "#808000",
-  "Drosophila_hydeii" = "#00FF00"  ,
-  "Drosophila_melanogaster" = "#008000",
-  "Drosophila_simulans" = "#00FFFF",
-  "Lysiphlebus_testaceipes" = "#008080",
-  "Metopolophium_dirhodum" = "#0000FF",
+  "Bradysia_nr.ocellaris" = "#FFFF00",
+  "Carpophilus_davidsoni" = "#9AD378",
+  "Carpophilus_nr.dimidiatus" = "#3EA534",
+  "Diuraphis_noxia" = "#B29C71",
+  "Drosophila_hydei" = "#F26B6B"  ,
+  "Drosophila_melanogaster" = "#E52823",
+  "Drosophila_simulans" = "#FE9C32",
+  "Lysiphlebus_testaceipes" = "#F08C3A",
+  "Metopolophium_dirhodum" = "#CAB2D6",
   "Psyllid_sp" = "#000080",
   "Rhopalosiphum_padi" = "#FF00FF",
   "Scaptodrosophila_lativittata" = "#800080"
 ) 
-
-scales::show_col(colours.taxon)
 
 
 #Source themes
@@ -115,8 +113,60 @@ counts <- read_csv("R_analysis/FILE_for_R_NEW.csv") %>%
                 target_subfragment = case_when(
                   str_detect(sample, "P1$") ~ "fwhF2-fwhR2n",
                   str_detect(sample, "P2$") ~ "fwhF2-HexCOIR4",
-                )) %>% #Add new sample_id column t
+                )) %>% 
+  mutate(taxon = taxon %>% 
+            str_replace("_dimidiatus", "_nr.dimidiatus") %>%
+            str_replace("hydeii", "hydei") %>%
+            str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")) %>%
   dplyr::select(-table) 
+
+
+# new counts
+ps <- readRDS("output/rds/ps.rds")
+
+newcounts <- ps %>%
+  speedyseq::psmelt() %>%
+  mutate(sample = sample_name %>% str_remove("_.*$"),
+         taxon = species %>% str_replace(" ", "_")) %>%
+  dplyr::select(taxon, sample_id, Abundance, sample, fcid) %>%
+  filter(Abundance > 0, !is.na(taxon)) %>%
+  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% #Check this with francesco!
+  mutate(sample_id=case_when(
+    fcid=="CGK9B" ~ paste0(sample, "_1"),
+    fcid=="CJL7D" ~ paste0(sample, "_2")
+  ))
+
+combined_analysis <- counts %>% left_join(newcounts) %>%
+  group_by(sample_id) %>%
+  filter(!is.na(fcid)) %>%
+  mutate(prop = Abundance) %>%
+  mutate_at(c("prop"),  ~ . / sum(., na.rm = TRUE) )
+
+# Check consistency between analyses
+gg.combined_analyses <- combined_analysis %>% 
+  dplyr::select(sample_id, taxon, prop, observed, fcid) %>%
+  mutate(observed = observed / 100) %>%
+  dplyr::rename(analysis1 = observed, analysis2 = prop) %>%
+  pivot_longer(starts_with("analysis"),
+               names_to="analysis",
+               values_to="Abundance") %>%
+  ggplot(aes(x = sample_id, y=Abundance, fill=taxon))+
+  geom_col(position="stack") +
+  facet_grid(analysis~fcid, scales="free", drop=TRUE) +
+  scale_fill_manual(values=colours.taxon)+ 
+  #scale_fill_brewer(palette="Paired") +
+  base_theme +
+  labs(x = "Sample", y="Relative Abundance", fill="Taxon")
+
+gg.combined_analyses
+
+
+# Replace old analysis with new
+counts <- combined_analysis %>%
+  dplyr::select(-observed, -count) %>%
+  dplyr::rename(observed = prop, count = Abundance) %>%
+  dplyr::mutate(observed = replace_na(observed, 0),
+                count = replace_na(count, 0))
 
 # Check all are proportions  
 counts %>%
@@ -130,8 +180,9 @@ counts %>%
 # Spread of reads
 counts %>%
   group_by(sample_id) %>%
-  summarise(exp_prop = sum(expected), obs_prop = sum(observed), Abundance = sum(count)) %>%
+  summarise(exp_prop = sum(expected), obs_prop = sum(observed), Abundance = sum(count), run) %>%
   ungroup() %>%
+  #group_by(run)%>%
   summarise(mean = mean(Abundance), 
             se = sd(Abundance)/sqrt(length(Abundance)),
             max = max(Abundance),
@@ -152,10 +203,12 @@ traits <- readxl::read_excel("biomass and hardness.xlsx")  %>%
                   str_replace("C\\.", "Carpophilus") %>%
                   str_replace("D\\.", "Drosophila") %>%
                   str_replace("A\\.", "Acizzia") %>%
-                  str_replace("dimidiatis", "dimidiatus") %>%
                   str_replace("hydeii", "hydei") %>%
                   str_replace_all(" ", "_") %>%
-                  str_remove_all("\\.")
+                  str_remove_all("\\.")%>%
+                  str_replace("nr_dimidiatis", "nr.dimidiatus")%>%
+                  str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")
+
                   ) %>%
   dplyr::mutate(exoskeleton = as.numeric(exoskeleton))
 
@@ -176,9 +229,6 @@ setdiff(counts$taxon, traits$taxon)
 
 # Join tables together
 joint <- counts %>%
-  dplyr::mutate(taxon = taxon %>%
-                  str_replace("_dimidiatus", "_nr_dimidiatus") %>%
-                  str_replace("hydeii", "hydei")) %>%
   left_join(traits%>%
             mutate(taxon = taxon %>% str_replace("hydeii", "hydei")), by="taxon") %>%
   dplyr::mutate(exp_individuals = expected,
@@ -250,14 +300,6 @@ primers <- tribble(
 
 # Read in sequences
 seqs <- insect::readFASTA("reference/mock_spp2.fa")
-seqnames <- names(seqs) %>%
-  str_replace("Bradysia_near_ocellaris","Bradysia_ocellaris")
-
-#Check for differencess in taxon names
-setdiff(seqnames, joint$taxon)
-setdiff(joint$taxon, seqnames)
-
-names(seqs) <- seqnames
 
 # Add primers to seqs
 primers.dna <- insect::char2dna(c("GGDACWGGWTGAACWGTWTAYCCHCC", rc("GTRATWGCHCCDGCTARWACWGG"),rc("TATDGTRATDGCHCCNGC")))
@@ -274,7 +316,7 @@ aligned <- aligned %>% as.list %>% as.character %>% lapply(., paste0, collapse =
             unlist %>% DNAStringSet
 
 # Check alignment
-BrowseSeqs(aligned)
+#BrowseSeqs(aligned)
 
 #Get forward dist
 Fprimerdist <- Biostrings::subseq(aligned, start=primers$Fstart[1], end = primers$Fend[1]) %>%
@@ -339,6 +381,7 @@ joint <- joint %>%
   left_join(primergc) 
 ```
 
+
 ## Look at differences between runs
 
 ```{r run differences}
@@ -359,6 +402,8 @@ gg.runra <- joint %>%
           legend.position = "bottom") +
     scale_y_continuous(labels = scales::percent) +
     labs(x="Sample", y="Relative abundance", title="Differences in relative abundances between protocols/runs")
+
+gg.runra
 
 #Write out
 pdf(file="figs/RA_between_runs.pdf", width = 11, height = 8 , paper="a4r")
@@ -385,6 +430,8 @@ gg.runhmap <- joint %>%
          y="Taxon",
          fill="Relative abundance",
          title="Consistency between runs")
+
+gg.runhmap
 
 #Write out
 pdf(file="figs/heatmap_between_runs.pdf", width = 11, height = 8 , paper="a4r")
@@ -413,6 +460,8 @@ gg.err_prop <- joint %>%
        y= "Expected proportions (log-odds)",
        colour = "Taxon") 
 
+gg.err_prop
+
 #Write out
 pdf(file="figs/err_proportions.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.err_prop)
@@ -425,7 +474,7 @@ gg.err_ratio <- joint %>%
                  str_replace("^.+_", paste0(str_extract(taxon, "."), "_"))) %>%
     compute_ratios(group_vars = c("sample_id", "mixture_type", "target_subfragment")) %>%
   mutate(Pair = paste(Taxon.x, Taxon.y, sep = ":")) %>% 
-  ggplot(aes(Pair, err_biomass, colour=sample_id)) +
+  ggplot(aes(Pair, err_individuals, colour=sample_id)) +
   geom_jitter(alpha=0.7) +
   geom_hline(yintercept = 1) +
   scale_y_log10() +
@@ -440,66 +489,21 @@ gg.err_ratio
 pdf(file="figs/err_ratio.pdf", width = 11, height = 8 , paper="a4r")
   plot(gg.err_ratio)
 try(dev.off(), silent=TRUE)
+  
+# Get the average pairwise bias for each method
+joint %>%
+  dplyr::filter(exp_individuals > 0 ) %>%
+  dplyr::mutate(Taxon = taxon %>%
+                 str_replace("^.+_", paste0(str_extract(taxon, "."), "_"))) %>%
+    compute_ratios(group_vars = c("sample_id", "mixture_type", "target_subfragment")) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  summarise(mean = mean(err_individuals, na.rm=TRUE), sd = sd(err_individuals, na.rm=TRUE), lower = range(err_individuals, na.rm = TRUE)[1], upper = range(err_individuals, na.rm = TRUE)[2])
 ```
 
 
 # Estimate bias using different models
 
 We will now estimate the bias using different conventional and CODA models
-
-## Francescos original analysis
-
-```{r francescos analysis}
-fit_fra <- readxl::read_excel("francescos_estimates.xlsx") %>%
-  mutate(taxon = taxon %>% str_replace(" ", "_") %>%
-           str_replace("dimidiatus", "nr_dimidiatus")%>%
-           str_replace("Psyllid_sp.", "Psyllid_sp")%>%
-           str_replace("Drosophila_hydeii", "Drosophila_hydei")) 
-
-#results
-fra_results <- joint %>%
-  dplyr::filter(exp_individuals> 0) %>%
-  left_join(fit_fra) %>%
-  mutate(
-    predicted = exp_individuals * bias, 
-    observed = observed,
-    estimated = bias
-  ) %>%
-  ungroup() %>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
-```
-
-## Recreate Francescos
-* First divide the total reads per sample to get expected reads per taxon per sample
-* Then calculate variation from expected reads per taxon per sample
-* Then average all varation by species
-
-```{r recreate francescos analysis}
-# get expected reads per taxon per sample
-fit_fra2 <- joint %>%
-  group_by(sample_id) %>%
-  filter(expected > 0) %>%
-  mutate(total = sum(count),
-         exp_counts = total * expected,
-         err_counts = (count - exp_counts) * 100 / total)  %>% #Why are we doing this??
-  ungroup %>%
-  group_by(taxon, mixture_type, target_subfragment) %>%
-  summarise(.pred = mean(err_counts))
-
-#results
-fra2_results <- joint %>%
-  dplyr::filter(exp_individuals > 0) %>%
-  left_join(fit_fra2) %>%
-  mutate(
-    predicted = exp_individuals * .pred, 
-    observed = observed,
-    estimated = .pred
-  )%>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) )
-
-```
 
 ## Mean proportions
 
@@ -555,37 +559,6 @@ lm_results <- fit_lm %>%
   ) %>%
     dplyr::select(!where(is.list))
 ```
-
-## clrlm
-
-Here we fit a simple linear model to centred log ratio transformed error vectors, using taxon as the predictor
-
-```{r clr}
-fit_clrlm <- joint %>%
-  filter(expected > 0) %>%
-  group_by(sample_id, target_subfragment, mixture_type) %>%
-  mutate(clr_error = metacal::clr(observed0) / metacal::clr(exp_individuals)) %>%
-  ungroup() %>%
-  group_by(target_subfragment, mixture_type) %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, clr_error ~ 0 + taxon, data = .)),
-           pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
-           coef_info = map(lm_obj, tidy)
-    ) 
-
-#results
-clrlm_results <- fit_clrlm %>%
-  unnest(pred, data) %>%
-  dplyr::filter(exp_individuals > 0)  %>%
-  mutate(
-    predicted = exp_individuals * .pred,
-    estimated = .pred
-  ) %>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) )  %>% 
-    dplyr::select(!where(is.list))
-```
-
 ## Complm
 
 Estimating bias  is complicated by the compositional nature of metabarcoding measurements. Because only relative abundances are measured, the measurement of a  sample (s) only provides information about the efficiencies of the taxa in the sample relative to each other.
@@ -630,20 +603,19 @@ fit_metacal <- joint %>%
    group_by(target_subfragment, mixture_type) %>%
     nest() %>%
     mutate(
-        fit = map(data, function(x){
+        fit = purrr::map(data, function(x){
         err_mat <- x %>%
-          dplyr::select(sample_id, taxon, err_individuals) %>%
+          dplyr::select(sample_id, taxon, err_individuals)%>%
           pivot_wider(id_cols= sample_id,
                       names_from = "taxon",
                       values_from = "err_individuals",
-                      values_fill = list(error=NaN)) %>%
+                      values_fill = list(err_individuals=NaN))%>%    
           column_to_rownames("sample_id") %>%
           as.matrix() 
         rows_to_keep <- rowSums(err_mat, na.rm=TRUE) > 0
         cols_to_keep <- colSums(err_mat, na.rm=TRUE) > 0
         err_mat <- err_mat[rows_to_keep, cols_to_keep]
-        #Fit different metacal centering methods
-        center(err_mat, method="proj", enframe=TRUE) %>%
+        metacal::center(err_mat, method="proj", enframe=TRUE) %>%
         magrittr::set_colnames(c("taxon", ".pred"))
         })) %>%
     unnest(fit) 
@@ -736,8 +708,6 @@ gg.rmse <- error %>%
   filter(!model %in% c("fra", "fra2")) %>%
   ggplot(aes(x=model, y=.estimate, fill=model)) +
   geom_col() +
-  base_theme+
-  geom_rangeframe() +
   facet_grid(target_subfragment~mixture_type) +
   scale_fill_brewer(palette="Paired") +
   theme(axis.text.x = element_text(angle=45, hjust = 1)) +
@@ -857,9 +827,10 @@ boot_partitioned <- boot_coefs %>%
     pivot_wider(names_from = mixture_type,
               values_from=estimate)) %>%
   group_by(extract_type, target_subfragment, taxon) %>%
-    transmute(bias_extract = estimate / DNA,
-           bias_PCR = DNA / PCR,
-           bias_seq = PCR)
+    transmute(bias_all = estimate,
+              bias_extract = estimate / DNA,
+              bias_PCR = DNA / PCR,
+              bias_seq = PCR)
 
 # Calculate bias as geometric mean, and standard error as geometric standard error of bootstrap replicates
 bias_steps <- boot_partitioned %>%
@@ -894,8 +865,9 @@ gg.bias_steps <- bias_steps %>%
     labs(x = "Contribution of laboratory step",
          y = "Efficiency / geometric mean",
          colour = "Taxon",
-         shape = "DNA Extraction") + 
-  theme(legend.position = "bottom")
+         shape = "DNA Extraction") +
+  base_theme+
+  theme(legend.position = "bottom") 
 
 gg.bias_steps
 
@@ -954,21 +926,64 @@ try(dev.off(), silent=TRUE)
 ## Plot the trajectories as small multiples with error pars
 
 gg.ra_traj2 <- ra_traj %>%
-    ggplot(aes(x = position, y= RA, color = extract_type, group=extract_type, shape=extract_type, fill=extract_type)) +
-    geom_hline(yintercept = 1, colour="grey80" )  +
+  dplyr::filter(extract_type == "DNEasy") %>%
+  dplyr::filter(!taxon == "Bradysia_nr.ocellaris") %>%
+    ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
+    geom_hline(yintercept = 1, colour="black" )  +
     geom_line() +
+    geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
     geom_ribbon(aes(ymax = (RA*SE^2), ymin=(RA/SE^2), colour=NULL), alpha=0.5) +
     geom_point() +
     scale_y_log10() +
-    #scale_color_manual(values = colours.taxon) +
+    scale_color_manual(values = colours.taxon) +
+    scale_fill_manual(values = colours.taxon) +
   facet_grid(taxon~target_subfragment)+ 
      labs(x = "Step in the workflow",
           y = "Abundance / geometric mean", 
           colour = "Taxon",
-        title = "Relative abundance trajectories") + 
-  theme(legend.position = "bottom")
-  
-gg.ra_traj2 
+        title = "DNEasy")   +
+  theme_void() +
+  theme(panel.spacing = unit(0, "lines"),
+        legend.position = "none",
+        strip.text.y = element_blank())
+
+gg.ra_traj2
+
+gg.ra_traj3 <- ra_traj %>%
+  dplyr::filter(extract_type == "QuickExtract") %>%
+    ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
+    geom_hline(yintercept = 1, colour="black")  +
+    geom_line() +
+    geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
+    geom_ribbon(aes(ymax = (RA*SE^2), ymin=(RA/SE^2), colour=NULL), alpha=0.5) +
+    geom_point() +
+    scale_y_log10() +
+    scale_color_manual(values = colours.taxon) +
+    scale_fill_manual(values = colours.taxon) +
+  facet_grid(taxon~target_subfragment)+ 
+     labs(x = "Step in the workflow",
+          y = "Abundance / geometric mean", 
+          colour = "Taxon",
+        title = "QuickExtract") +
+  theme_void() +
+  theme(panel.spacing = unit(0, "lines"),
+        panel.grid = element_blank(),
+        legend.position = "none")
+ 
+
+Fig1a <- gg.ra_traj2 + gg.ra_traj3 
+
+Fig1 <- gg.bias_steps - Fig1a + plot_annotation(tag_levels = "A")
+
+Fig1
+
+# CAn i addd little +1 -0.4 icons to the plot tahat will allow me t oget rid of the left plot
+
+#Save figure
+pdf(file="figs/fig1_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
+  plot(Fig1)
+try(dev.off(), silent=TRUE)
+
 ```
 
 # Next - model partitioned bias as a function of species traits
@@ -1001,36 +1016,96 @@ sequencing, and nA is the actual proportion of biomass for that taxon in the sam
 ```{R prediction on partitioned}
 #Predict seperated bias 
 error_preds <- joint %>%
-  left_join(bias_steps) %>%
+  left_join(bias_steps 
+            #%>%
+              #mutate(step = case_when(
+              #  extract_type == "DNEasy" & step == "extract" ~ "DNEasy",
+              #  extract_type == "QuickExtract" & step == "extract" ~ "QuickExtract",
+              #  TRUE ~ step
+              #)) %>%
+              #dplyr::filter(!(extract_type == "QuickExtract" & !step == "QuickExtract"))
+              ) %>%
   filter(exp_individuals > 0, mixture_type %in% c("DNEasy", "QuickExtract")) %>%
   mutate(primerdist = Fdist  + Rdist) %>%
   dplyr::rename(bias = gm_mean)
 
-# Specify LM
-lm_spec <- linear_reg() %>%
-  set_engine(engine = "lm") %>%
-  step_normalize(all_numeric()) %>%
-  step_dummy(taxon, exoskeleton) 
-lm_spec
+# Specify LM Recipe and map
+lm_mod <-
+  linear_reg(mode = "regression") %>%
+  set_engine("lm")
+
+wf <-
+  workflow() %>%
+  add_model(lm_mod)
+
+## big function of model fitting and predicting
+bias_coeffs <- function(df, step="all") {
+
+  print(step)
+  if(step == "extract"){
+    df <- df %>% dplyr::select(bias, exoskeleton, biomass_mm3)
+  } else if (step == "PCR"){
+    df <-  df %>% dplyr::select(bias, primerdist, `G|C`)
+  } else if(step== "seq"){
+    df <-  df %>% dplyr::select(bias, `G|C`)
+  } else if (step=="all"){
+    df <- df
+  }
+  print(df)
+  #create recipe
+  lm_rec <- df %>%
+    recipe(bias ~ ., data=df) %>%
+    step_zv(all_numeric(), -all_outcomes()) %>%
+    step_normalize(all_numeric()) %>%
+    step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
+    step_lincomb(all_numeric(), -all_outcomes()) %>%
+    step_dummy(all_nominal(), one_hot=TRUE) 
+    
+  print(prep(lm_rec))
+  #fit workflow
+  fit_wf <-
+    wf %>%
+    add_recipe(lm_rec) %>%
+    fit(data = df)
+  
+  #Get coefficients
+  fit_wf %>%
+    pull_workflow_fit()  %>% 
+  tidy()
+}
+
+
 
 partition_fit <- error_preds %>%
-  mutate(#Fdist = replace_na(Fdist, 0), #NAs are actual missing data
-         #Rdist = replace_na(Rdist, 0),
-         primerdist = Fdist + Rdist,
-         exoskeleton = as.factor(exoskeleton),
-         taxon = as.factor(taxon),
-         primerdist) %>%
-  group_by(step)  %>%
+  ungroup()%>%
+  filter(target_subfragment=="fwhF2-fwhR2n") %>%
+  mutate(primerdist = Fdist + Rdist) %>%
+  dplyr::select(bias, exoskeleton, biomass_mm3, primerdist, `G|C`, step, mixture_type) %>%
+  mutate(exoskeleton= case_when(
+           exoskeleton == 1 ~ "soft",
+           exoskeleton == 2 ~ "medium",
+           exoskeleton == 3 ~ "hard"
+         ))  %>%
+    mutate(exoskeleton = factor(exoskeleton, levels=c( "soft", "hard", "medium") ))%>%
+  group_by(step, mixture_type)  %>% 
   nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, bias ~ exoskeleton + biomass_mm3 + primerdist + `G|C`, data = .)),
-           coef_info = map(lm_obj, tidy),
-           vi = map(lm_obj, vip::vi)
-    )%>%
-  unnest(coef_info)  %>%
+  #mutate(coef_info =  map2(data, step, possibly(bias_coeffs, otherwise = NA))) %>%
+  mutate(coef_info =  map(data, possibly(bias_coeffs, otherwise = NA))) %>%
+  unnest(coef_info) %>%
   #unnest(vi) %>%
   dplyr::select(!where(is.list)) 
 
-#VI default for linear model is based on the absolute value of the t-statistic
+partition_fit %>%
+  dplyr::mutate(term = str_replace(term, "(Intercept)", "exoskeleton_medium")) %>%
+  drop_na() %>%
+  ggplot(aes(x=term, y=estimate)) + 
+  geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error), size=1)+
+  geom_hline(yintercept = 0)+
+  facet_grid(mixture_type~step) +
+  coord_flip()
+
+# A better comparison might be te residuals explained by the partitioned vs unpartitioned bias. Or the variance explained by each coefficient?
+
 
 # Interestingly some nonsensical values are significant for some steps - ie primerdist is significant for extract
 # This could either be because of correlation/colinearity with a more important predictor, or show that bias has not been properly partitioned
@@ -1101,6 +1176,21 @@ seq_fit <- error_preds %>%
   ))
 
 ```
+
+
+# Plot trait correlations
+```{r trait cor}
+
+joint %>%
+    dplyr::select(dorsal_area_mm2, depth_mm,lateral_area_mm2, surface_mm2, biomass_mm3, exoskeleton, Fdist, Rdist, `G|C`) %>%
+    cor %>%
+    {.[order(abs(.[, 1]), decreasing = TRUE), 
+       order(abs(.[, 1]), decreasing = TRUE)]} %>%
+    corrplot(method = "number", type = "upper", mar = c(0, 0, 1.5, 0),
+            title = "Correlations between taxon traits")
+
+```
+
 
 ### TRY WITH FULL MDOEL!
 
@@ -1241,7 +1331,7 @@ tidied_pca %>%
 # Plot PCA
 juice(pca_prep) %>%
   ggplot(aes(PC1, PC2, label = sample_id)) +
-  geom_point(aes(color = position), alpha = 0.7, size = 2) +
+  geom_point(aes(color = sample_id), alpha = 0.7, size = 2) +
   geom_text(check_overlap = TRUE, hjust = "inward", family = "IBMPlexSans") +
   facet_grid(~position) %>%
   labs(color = NULL)
@@ -1262,7 +1352,7 @@ test3 <- juice(pca_prep) %>%
 
 colors <- unname( colours.taxon[6:9])
 colors <- colors[as.numeric(test3$timepoint)]
-scatterplot3d(test3[,c(7,5,6)], grid=TRUE,pch=20, box=FALSE, color = colors )
+scatterplot3d(test3[,c(7,5,6)], grid=TRUE,pch=20, box=TRUE, color = colors )
 ```
 
 
@@ -1277,23 +1367,3 @@ git2r::repository()
 
 sessioninfo::session_info()
 ```
-
-# EXTRA
-
-### Linear model on compositional vector
-
-Type of noise in our system we need to model:
-Random multiplicative error (PCR?)
-Random counting error (Multinomial) - read counts normalised to proportions
-or 
-Random counting error (Poisson)
-
-##Generalised linear regression model
-
-The goal is to distinguish between samples and  the underlying communities
-* n samples, Q taxa, and p parameters
-* X is an nxp matrix of sample covariates (ie a model matrix)
-* Xi is a px1 column vector of covariates for sample i
-* R is a pxQ matrix of composition and bias parameters
-
-X = model.matrix(~ 0 + Specimen + Protocol, sam)
