@@ -855,7 +855,6 @@ gg.final_fits <- boot_results %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   ggplot(aes(logit(predicted), logit(observed))) +
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  geom_rangeframe(colour="black")+
   geom_text(data=final_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
  stat_density_2d(geom = "polygon", aes(alpha = ..level.., fill = taxon))+
   facet_grid(target_subfragment~mixture_type) +
@@ -863,8 +862,10 @@ gg.final_fits <- boot_results %>%
   base_theme +
   theme(panel.grid = element_line(size = rel(1))) +
   scale_alpha_continuous(range=c(0.3, 0.9))+
-  theme(panel.grid = element_blank(),
-        legend.position = "none")+
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position = "none",
+        legend.text = element_text(face="italic")) +
     labs(x = "Bias model prediction (log-odds)", 
         y = "Observed proportions (log-odds)",
         colour = "Taxon")+
@@ -882,7 +883,6 @@ gg.err_prop <- joint%>%
   mutate_at(vars(observed, expected, exp_individuals), logit) %>%
   ggplot(aes(exp_individuals,observed, color = taxon)) + 
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  geom_rangeframe(colour="black")+
   geom_text(data=prop_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
   geom_point(alpha=0.5) +
   scale_colour_manual(values = colours.taxon) +
@@ -891,8 +891,10 @@ gg.err_prop <- joint%>%
        y = "Observed proportions (log-odds)",
        colour = "Taxon")  +
   base_theme +
-  theme(panel.grid = element_blank(),
-        legend.position = "none") +
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position = "none",
+        legend.text = element_text(face="italic")) +
     facet_grid(target_subfragment~mixture_type) +
   coord_cartesian(xlim = c(-12,3), ylim = c( -12, 3))
 
@@ -913,16 +915,22 @@ gg.final_ests <- boot_coefs  %>%
         position = position_dodge(width = 0.5)) +
     scale_colour_manual(values = colours.taxon2) +
     geom_hline(yintercept = 1, colour="grey80" )  +
-    scale_y_log10() +
+    scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                  labels = trans_format("log10", math_format(10^.x))) +
+    annotation_logticks(sides="l", outside=TRUE) +
     geom_rangeframe(color = "black") +
   base_theme +
-  theme(panel.grid = element_blank(), 
-        legend.position = "none",
-        axis.text.x = element_text(face="italic")) +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position = "bottom",
+        axis.text.x = element_blank(),
+        legend.text = element_text(face="italic")) +
     facet_grid(target_subfragment~mixture_type) +
   labs(y = "Efficiency / geometric mean",
-       x = "Taxon")
-
+       x = "Taxon",
+      colour = "Taxon") +
+  coord_cartesian(clip = "off")
 
 Fig1 <- gg.err_prop /  gg.final_fits / gg.final_ests  + plot_annotation(tag_levels = "A")  & theme(plot.margin =unit(c(0,0,0,0), "cm"))
 
@@ -976,22 +984,32 @@ gg.bias_steps <- bias_steps %>%
       !step=="extract" ~ "NA",
       TRUE ~ extract_type
       )) %>%
-  ggplot(aes(x=step, y=gm_mean, shape=extract_type, colour = taxon)) +
+  dplyr::filter(!step=="all") %>%
+  dplyr::mutate(step = step %>% 
+                  str_replace("extract", "DNA Extraction") %>%
+                  str_replace("seq", "Post-PCR")) %>%
+  ggplot(aes(x=taxon, y=gm_mean, shape=extract_type, colour = taxon)) +
     geom_pointrange(aes(ymin = gm_mean / gm_se^2, ymax = gm_mean * gm_se^2), #This cant be right
         fatten = 4,
-        position = position_dodge(width = 0.5)) +
+        position = position_dodge(width = 1)) +
     geom_hline(yintercept = 1, colour="grey80" )  +
-    scale_y_log10() +
+    scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                  labels = trans_format("log10", math_format(10^.x))) +
+    annotation_logticks(sides="l", outside = TRUE) +
     geom_rangeframe(color = "black") +
     scale_colour_manual(values = colours.taxon) +
     scale_shape_manual(values = c(17,19,8))+ 
-    facet_grid(target_subfragment~.)+
-    labs(x = "Contribution of laboratory step",
+    facet_grid(target_subfragment~step)+
+  base_theme+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "botton") +
+      labs(x = "Contribution of laboratory step",
          y = "Efficiency / geometric mean",
          colour = "Taxon",
          shape = "DNA Extraction") +
-  base_theme+
-  theme(legend.position = "bottom") 
+  coord_cartesian(clip = "off")
 
 gg.bias_steps
 
@@ -1019,41 +1037,20 @@ ra_traj <- bias_steps %>%
   mutate(position = position %>% str_remove("_") %>%
            factor(levels=c("Insects", "DNA", "Amplicons", "Libraries")))
 
-# make plot
-gg.ra_traj <- ra_traj %>%
-    ggplot(aes(position, RA, color = taxon)) +
-    geom_hline(yintercept = 1, colour="grey80")  +
-    geom_path(aes(group = taxon)) +
-    geom_point() +
-    scale_y_log10() +
-    geom_rangeframe(color = "black") +
-    scale_color_manual(values = colours.taxon) +
-  facet_grid(target_subfragment~extract_type)+ 
-     labs(x = "Step in the workflow",
-          y = "Abundance / geometric mean", 
-          colour = "Taxon",
-        title = "Relative abundance trajectories") + 
-  theme(legend.position = "bottom")
-  
-gg.ra_traj
-
-#Save figure
-pdf(file="figs/ra_trajectories.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.ra_traj)
-try(dev.off(), silent=TRUE)
 
 ## Plot the trajectories as small multiples with error pars
 
-gg.ra_traj2 <- ra_traj %>%
+gg.ra_traj <- ra_traj %>%
   dplyr::filter(extract_type == "DNEasy") %>%
   dplyr::filter(!taxon == "Bradysia_nr.ocellaris") %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black" )  +
     geom_line() +
-    geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
+    #geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
     geom_ribbon(aes(ymax = (RA*SE^2), ymin=(RA/SE^2), colour=NULL), alpha=0.5) +
     geom_point() +
-    scale_y_log10() +
+    scale_y_log10(breaks = c(0.01, 1, 100),
+                  labels = trans_format("log10", math_format(10^.x))) +
     scale_color_manual(values = colours.taxon) +
     scale_fill_manual(values = colours.taxon) +
   facet_grid(taxon~target_subfragment)+ 
@@ -1061,22 +1058,22 @@ gg.ra_traj2 <- ra_traj %>%
           y = "Abundance / geometric mean", 
           colour = "Taxon",
         title = "DNEasy")   +
-  theme_void() +
-  theme(panel.spacing = unit(0, "lines"),
-        legend.position = "none",
-        strip.text.y = element_blank())
-
-gg.ra_traj2
-
-gg.ra_traj3 <- ra_traj %>%
+  base_theme+
+  theme(panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.y = element_line(),
+        strip.text = element_blank(),
+        legend.position = "none")
+gg.ra_traj2 <- ra_traj %>%
   dplyr::filter(extract_type == "QuickExtract") %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black")  +
     geom_line() +
-    geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
+    #geom_text(aes(label=paste0("x",round(RA, 1))),nudge_y=2, colour="black")+
     geom_ribbon(aes(ymax = (RA*SE^2), ymin=(RA/SE^2), colour=NULL), alpha=0.5) +
     geom_point() +
-    scale_y_log10() +
+    scale_y_log10(breaks = c(0.01, 1, 100),
+                  labels = trans_format("log10", math_format(10^.x))) +
     scale_color_manual(values = colours.taxon) +
     scale_fill_manual(values = colours.taxon) +
   facet_grid(taxon~target_subfragment)+ 
@@ -1084,53 +1081,31 @@ gg.ra_traj3 <- ra_traj %>%
           y = "Abundance / geometric mean", 
           colour = "Taxon",
         title = "QuickExtract") +
-  theme_void() +
-  theme(panel.spacing = unit(0, "lines"),
-        panel.grid = element_blank(),
+  base_theme+
+  theme(panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.y = element_line(),
+        strip.text = element_blank(),
         legend.position = "none")
  
 
-Fig1a <- gg.ra_traj2 + gg.ra_traj3 
+Fig2a <- gg.ra_traj + gg.ra_traj2 
 
-Fig1 <- gg.bias_steps - Fig1a + plot_annotation(tag_levels = "A")
+Fig2 <- gg.bias_steps - Fig2a + plot_annotation(tag_levels = "A")
 
-Fig1
+Fig2
 
-# CAn i addd little +1 -0.4 icons to the plot tahat will allow me t oget rid of the left plot
 
 #Save figure
-pdf(file="figs/fig1_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
-  plot(Fig1)
+pdf(file="figs/fig2_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
+  plot(Fig2)
 try(dev.off(), silent=TRUE)
 
 ```
 
 # Next - model partitioned bias as a function of species traits
-: First,
-how do the traits of the taxon (size, sclerotization) affect its probability of detection (presence/absence) in the two types of samples?
-Second, how do the traits of the taxon affect its relative read count
-in the two types of samples?
-To answer the first question, we used a generalized linear
-mixed effects model of presence as a function of fixed effects
-Sample type (ethanol or tissue), size and sclerotization, along with
-all two‐ and three‐way interactions. To account for the paired design (where both types of samples were derived from the same
-Malaise trap catches), we defined Sample ID as a random effect.
-Since the response was binomial, we assumed a logit‐link and binomially distributed error.
 
-#
-
-  + Can Extraction bias be predicted by scheletorization?
-  + Can PCR bias be predicted by amplicon GC content, or primer binding mismatch?
-  + Can library bias be predicted by PCR barcode?
-
-# Predict bias from pcr mismatch and gc content
-
-We focused on the log ratio between actual and observed 
-
-formula R = log{(nO + 0.5)/(nA + 0.5)} 
-where R is the response
-where nA is the taxon‐ and sample‐specific read count (Observed compositions) from the
-sequencing, and nA is the actual proportion of biomass for that taxon in the sample
+How do specimen traits affect its efficiency
 
 ```{R prediction on partitioned}
 #Predict seperated bias 
@@ -1214,7 +1189,7 @@ partition_fit <- error_preds %>%
   #unnest(vi) %>%
   dplyr::select(!where(is.list)) 
 
-partition_fit %>%
+gg.bias_traits <- partition_fit %>%
   dplyr::mutate(term = str_replace(term, "(Intercept)", "exoskeleton_medium")) %>%
   drop_na() %>%
   ggplot(aes(x=term, y=estimate)) + 
@@ -1299,8 +1274,9 @@ seq_fit <- error_preds %>%
 
 # Plot trait correlations
 ```{r trait cor}
+library(corrplot)
 
-joint %>%
+gg.trait_cor <- joint %>%
     dplyr::select(dorsal_area_mm2, depth_mm,lateral_area_mm2, surface_mm2, biomass_mm3, exoskeleton, Fdist, Rdist, `G|C`) %>%
     cor %>%
     {.[order(abs(.[, 1]), decreasing = TRUE), 
@@ -1308,85 +1284,9 @@ joint %>%
     corrplot(method = "number", type = "upper", mar = c(0, 0, 1.5, 0),
             title = "Correlations between taxon traits")
 
+
+gg.trait_cor + gg.bias_traits
 ```
-
-
-### TRY WITH FULL MDOEL!
-
-Doesnt work because of colienarity - ie these other factors are a function of taxon and therefore totally colinear
-```{r}
-# Specify LM
-lm_spec <- linear_reg() %>%
-  set_engine(engine = "lm") %>%
-  step_normalize(all_numeric()) %>%
-  step_dummy(taxon, exoskeleton) 
-lm_spec
-
-fit_complm <- joint %>%
-  filter(exp_individuals > 0) %>%
-  mutate(#Fdist = replace_na(Fdist, 0), #NAs are actual missing data
-         #Rdist = replace_na(Rdist, 0),
-         primerdist = Fdist + Rdist,
-         exoskeleton = as.factor(exoskeleton),
-         taxon = as.factor(taxon),
-         primerdist) %>%
-  group_by(mixture_type, target_subfragment)  %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, center_elts(observed0 / exp_individuals) ~ exoskeleton + biomass_mm3 + primerdist + `G|C`, data = .)),
-           #pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
-           coef_info = map(lm_obj, tidy),
-           vi = map(lm_obj, vip::vi)
-    )
-
-test <-fit_complm %>%
-  unnest(coef_info)%>%
-    dplyr::select(!where(is.list))
-  
-  
-  boot_models %>% 
-  purrr::map(function(x){ 
-    x <- x %>%
-      unnest(vi)
-  }) %>%
-  bind_rows(.id="name") %>%
-  tidyr::separate(name, into=c("mixture_type", "target_subfragment"), sep=";")%>%
-    dplyr::select(!where(is.list))
-
-
-
-```
-
-
-
-```{r bias preiction}
-# Predict bias of the whole communties
-bias <- boot_coefs  %>%
-    dplyr::filter(!extract_type=="NA") %>%
-    group_by(taxon, target_subfragment, extract_type) %>%
-    summarise(gm_quantiles(estimate, q = c(0.05, 0.5, 0.95), na_rm=TRUE, wide=TRUE),
-              gm_mean = metacal::gm_mean(estimate, na.rm=TRUE),
-              gm_se = metacal::gm_sd(estimate, na.rm = TRUE)) %>%
-    ungroup 
-
-%>%
-  pivot_longer(starts_with("bias_"),
-               names_to = c(".value", "step"),
-               names_sep="_") %>%
-    group_by(taxon, target_subfragment,extract_type, step) %>%
-    summarise(gm_quantiles(bias, q = c(0.05, 0.5, 0.95), na_rm=TRUE, wide=TRUE),
-              gm_mean = metacal::gm_mean(bias, na.rm=TRUE),
-              gm_se = metacal::gm_sd(bias, na.rm = TRUE)) %>%
-    ungroup %>%
-    rename_with(~gsub("^q", "gm_", .x), starts_with("q"))
-
-#Predict on whole insect pools - want to rpedict the different bias
-traits <- joint %>%
-  left_join(bias) %>%
-  filter(exp_individuals > 0, mixture_type %in% c("DNEasy", "QuickExtract")) %>%
-  mutate(primerdist = Fdist  + Rdist)
-
-```
-
 
 
 # PCA plot of whole composition through process

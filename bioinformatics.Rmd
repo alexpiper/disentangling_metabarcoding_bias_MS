@@ -1,5 +1,6 @@
 ---
-title: "iMapPESTS local metabarcoding workflow"
+title: "Bias Partion Manuscript"
+subtitle: "Bioinformatic analysis"
 author: "A.M. Piper"
 date: "`r Sys.Date()`"
 output:
@@ -26,29 +27,33 @@ opts_chunk$set(dev = 'png')
 ```
 
 # Introduction 
-The first run: 190412_M03633_0313_000000000-CGK9B
-The second run: 200203_M03633_0388_000000000-CJL7D
+
+    First sequencing run : 190412_M03633_0313_000000000-CGK9B
+    Second sequencing run: 200203_M03633_0388_000000000-CJL7D
 
 # Demultiplex sequencing reads
-For this workflow to run, we need to first demultiplex the miseq run again as the miseq does not put indexes in fasta headers by default, and also obtain some necessary files from the sequencing folder. The below code is written for the Agriculture Victoria BASC server, and the locations will be different if you are using a different HPC cluster.
+
+The first step of this analysis is to demultiplex the pooled MiSeq reads into their constituent samples. The below code is written for the Agriculture Victoria BASC server, and the locations will be different if you are analysis this data locally or on a different HPC cluster.
 
 The output directory should be unique for each sequencing run, named as the flowcell id, within a directory called data
 
-For example:
-    root/
-    ├── data/
-       ├── CGK9B/
-       ├── CJL7D/
+    For example:
+        root/
+        ├── data/
+           ├── CGK9B/
+           ├── CJL7D/
 
-BASH:
+
 ```{bash demultiplex 1 mismatch}
+#!/bin/bash
+
 #load module
 module load bcl2fastq2/2.20.0-foss-2018b
 
 #raise amount of available file handles
 ulimit -n 4000
 
-###Run1
+### Demultiplex Run 1
 
 #Set up input and outputs - CHANGE THIS TO YOUR DATA FOLDER
 inputdir=/group/sequencing/190412_M03633_0313_000000000-CGK9B
@@ -82,7 +87,7 @@ for i in *.fastq.gz; do
 done
 
 
-###Run2
+### Demultiplex Run 2
 
 #Set up input and outputs - CHANGE THIS TO YOUR DATA FOLDER
 inputdir=/group/sequencing/200203_M03633_0388_000000000-CJL7D
@@ -115,8 +120,10 @@ for i in *.fastq.gz; do
   fi
 done
 
+echo complete
 ```
-The directory structure should now look something like this:
+
+The analysis directory structure should now look something like this:
 
     root/
     ├── data/
@@ -136,7 +143,7 @@ If you don't have the sample_data, output and doc folders yet they will be made 
 
 # Install packages and setup directories
 
-This pipeline requires various R packages to be installed prior to running. These are obtained from CRAN, Bioconductor and Github. The seqateurs R package also provides wrappers around other software packages for QC. For convenience we will download and install these software in a new folder called "bin"
+This pipeline requires various R packages to be installed prior to running. These are obtained from CRAN, Bioconductor and Github. This pipeline also depends on the external software packages BBMap, FastQC and BLAST, for which we will use the convenience functions contained within the `seqateurs` and `taxreturn` packages to download the latest versions of these into a the "bin" directory within our working directory
 
 ```{r install & Load packages} 
 #Set required packages
@@ -186,6 +193,10 @@ seqateurs::bbmap_install(dest.dir = "bin")
 #Install fastqc
 seqateurs::fastqc_install(dest.dir = "bin")
 
+#Install BLAST
+taxreturn::blast_install(dest.dir = "bin")
+
+
 # Create directories
 if(!dir.exists("data")){dir.create("data", recursive = TRUE)}
 if(!dir.exists("reference")){dir.create("reference", recursive = TRUE)}
@@ -200,7 +211,7 @@ if(!dir.exists("output/results/filtered")) {dir.create("output/results/filtered"
 
 ## Create sample sheet 
 
-In order to track samples and relevant QC statistics throughout the metabarcoding pipeline, we will first create a new samplesheet from our input samplesheets. This function requires both the SampleSheet.csv used for the sequencing run, and the runParameters.xml, both of which should have been automatically obtained from the demultiplexed sequencing run folder in the bash step above
+In order to track samples and relevant QC statistics throughout the metabarcoding pipeline, we will first create a new metadata sheet from our miseq submission samplesheets. This function requires both the SampleSheet.csv used for the sequencing run, and the runParameters.xml, both of which should have been automatically obtained from the demultiplexed sequencing run folder in the bash step above
 
 ```{r create samplesheet}
 runs <- dir("data/") #Find all directories within data
@@ -251,7 +262,7 @@ write_csv(logdf, "output/logs/logdf.csv")
 
 # Quality checks:
 
-We will conduct 3 quality checks. Firstly a check of the entire sequence run, followed by a sample level quality check to identify potential issues with specific samples. And then a calculation of the index switching rate by summarising correctly assigned vs missasigned indices.
+We will conduct 3 quality checks. Firstly a check of the entire sequence run, followed by a sample level quality check to identify potential issues with specific samples. And then a calculation of the index switching rate by summarizing correctly assigned vs mis-assigned indices.
 
 ```{r QC}
 #Load sample sheet
@@ -397,8 +408,8 @@ for (i in 1:length(runs)){
 
 # Trim Primers
 
-DADA2 requires Non-biological nucleotides i.e. primers, adapters, linkers, etc to be removed. Following demultiplhowever primer sequences still remain in the reads and must be removed prior to use with the DADA2 algorithm. 
-For this workflow we will be using the Kmer based adapter trimming software BBDuk (Part of BBTools package https://jgi.doe.gov/data-and-tools/bbtools/) to trim the primers from our raw data files. the seqateurs R package contains a wrapper fucntion to call bbduk from R to trim primers.
+DADA2 requires Non-biological nucleotides i.e. primers, adapters, linkers, etc to be removed. Following demultiplexing primer sequences still remain in the reads and must be removed prior to use with the DADA2 algorithm. 
+For this workflow we will be using the Kmer based adapter trimming software BBDuk (Part of BBTools package https://jgi.doe.gov/data-and-tools/bbtools/) to trim the primers from our raw data files using hte wrapper function provided within the seqateurs R package.
 
 ```{r primer trimming , message=FALSE}
 #Load sample sheet
@@ -549,9 +560,9 @@ This has output a prefilt_quality.pdf plot for each of the runs analysed in the 
 
 Ensure that the blue suggested trunclen looks reasonable before continuing. Truncating length will reduce the number of reads violating the expected error filter, and therefore increase the number of reads proceding through the pipeline. The reverse reads will generally have lower quality, and therefore a lower truncLen than the forward reads.
 
-# Filter reads {.tabset}
+# Filter reads
 
-This stage will use read truncation and max expected error function to remove low quality reads and read tails. All reads containing N bases will also be removed. this will output _postfilt_quality.pdf in the logs folder to determine how sucessfull it has been in cleaning up the quality.
+This stage will use read truncation and max expected error function to remove low quality reads and read tails. All reads containing N bases will also be removed. this will output FCID_postfilt_quality.pdf in the logs folder to determine how successful it has been in cleaning up the quality.
 
 ## Non-length variable
 
@@ -643,7 +654,11 @@ write_csv(logdf, "output/logs/logdf.csv")
 
 # Infer sequence variants for each run
 
-This workflow uses the DADA2 algorithm to differentiate real sequences from error using their abundance and co-occurance patters. This relies on the assumption of a random error process where base errors are introduced randomly by either PCR polymerase or sequencing, real sequences will be high quality in the same way, while bad sequences are bad in different individual ways. DADA2 depends on a parameterized error model (the 16(possible bases) × 41(phred score) transition probabilities, for example, p(A→C, 35)), which is estimated from the data. DADA2’s default parameter estimation method is to perform a weighted loess fit to the regularized log of the observed mismatch rates as a function of their quality, separately for each transition type (for example, A→C mismatches are fit separately from A→G mismatches). Following error model learning, all identical sequencing reads are dereplicated into into “Amplicon sequence variants” (ASVs) with a corresponding abundance equal to the number of reads with that unique sequence. The forward and reverse reads are then merged together by aligning the denoised forward reads with the reverse-complement of the corresponding reverse reads, and then constructing the merged “contig” sequences. Following this step, a sequence variant table is constructed and saved as an RDS file.
+This workflow uses the DADA2 algorithm to differentiate real sequences from error using their abundance and co-occurance patters. This relies on the assumption of a random error process where base errors are introduced randomly by either PCR polymerase or sequencing, real sequences will be high quality in the same way, while bad sequences are bad in different individual ways.
+
+DADA2’s default parameter estimation method is to perform a weighted loess fit to the regularized log of the observed mismatch rates as a function of their quality, separately for each transition type (for example, A→C mismatches are fit separately from A→G mismatches). We will estimate this model separately for each MiSeq lane, using a random subsample of reads.
+ 
+Following error model learning, all identical sequencing reads are dereplicated into into “Amplicon sequence variants” (ASVs) with a corresponding abundance equal to the number of reads with that unique sequence. The forward and reverse reads are then merged together by aligning the denoised forward reads with the reverse-complement of the corresponding reverse reads, and then constructing the merged “contig” sequences. Following this step, a sequence variant table is constructed and saved as an RDS file.
 
 ```{r DADA}
 set.seed(100) # set random seed for reproducability
@@ -727,9 +742,8 @@ write_csv(logdf, "output/logs/logdf.csv")
 
 # Merge Runs, Remove Chimeras and filter
 
-Following denoising and merging of reads, if there were multiple flowcells of data analyse the sequence tables from these will be merged together. Next the sequences are checked for chimeras, and all sequences containing stop codons are removed. The final cleaned sequence table is saved as output/rds/seqtab_final.rds
+Following denoising of reads we will merge the two MiSeq runs together, then remove chimeras, sequences of incorrect length, non-homologous sequences and all sequences containing stop codons. The final cleaned sequence table is saved as output/rds/seqtab_final.rds
 
-Note: this will change if you are using a coding marker or not
 
 ```{r chimera filt coding}
 seqtabs <- list.files("output/rds/", pattern="seqtab.rds", full.names = TRUE)
@@ -822,7 +836,8 @@ try(dev.off(), silent=TRUE)
 
 # Assign taxonomy
 
-We will use BLAST to assign our sequences to a local datbase
+Next we will use BLAST to assign our taxonomy to our mock communities using a local reference database
+
 ```{r IDTAXA BLAST}
 seqtab_final <- readRDS("output/rds/seqtab_final.rds")
 
@@ -1036,3 +1051,14 @@ pdf(paste0("output/logs/read_tracker_separate.pdf"), width = 11, height = 8 , pa
 try(dev.off(), silent=TRUE)
 ```
 
+# Reproducability Receipt
+
+```{details, eval=TRUE, echo = FALSE, details.summary = 'Reproducability receipt'}
+# datetime
+Sys.time()
+
+#repository
+git2r::repository()
+
+sessioninfo::session_info()
+```
