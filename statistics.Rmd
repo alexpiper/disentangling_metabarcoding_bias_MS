@@ -1232,7 +1232,6 @@ gg.bias_steps <- bias_steps %>%
     scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
                   labels = trans_format("log10", math_format(10^.x))) +
     annotation_logticks(sides="l", outside = TRUE) +
-    geom_rangeframe(color = "black") +
     scale_colour_manual(values = colours.taxon) +
     scale_shape_manual(values = c(17,19,8))+ 
     facet_grid(target_subfragment~step)+
@@ -1240,7 +1239,7 @@ gg.bias_steps <- bias_steps %>%
   theme(panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
         axis.text.x = element_blank(),
-        legend.position = "botton") +
+        legend.position = "bottom") +
       labs(x = "Contribution of laboratory step",
          y = "Efficiency / geometric mean",
          colour = "Taxon",
@@ -1469,7 +1468,7 @@ p1 <- ggtree(tree) +
 
 
 gg.traits <- trait_data %>%
-  magrittr::set_colnames(c("taxon", "Surface area", "Biomass", "Sclerotisation", "P1 mismatch", "GC percentage","P1 mismatch")) %>%
+  magrittr::set_colnames(c("taxon", "Surface area", "Biomass", "Sclerotisation", "P1 mismatch", "GC percentage","P2 mismatch")) %>%
   pivot_longer(cols=-taxon,
                names_to="trait",
                values_to="value") %>%
