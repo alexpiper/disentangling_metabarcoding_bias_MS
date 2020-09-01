@@ -838,7 +838,7 @@ try(dev.off(), silent=TRUE)
 
 Next we will use BLAST to assign our taxonomy to our mock communities using a local reference database
 
-```{r IDTAXA BLAST}
+```{r BLAST taxonomy}
 seqtab_final <- readRDS("output/rds/seqtab_final.rds")
 
 # Get sequences
@@ -848,7 +848,7 @@ names(seqs) <- colnames(seqtab_final)
 
 result <- blast(query=seqs,db="reference/mock_spp2.fa", evalue=1e06) %>%
   dplyr::filter(!is.na(sseqid)) %>%
-   dplyr::filter(pident > 97, qcovs > 95) 
+   dplyr::filter(pident > 97, qcovs > 95)  #Changed from 97 and 95
 
 top_hit <- result %>%
    dplyr::group_by(qseqid) %>%
@@ -921,6 +921,8 @@ tax %>%
   saveRDS("output/rds/tax.rds") 
 ```
 
+# Loo
+
 
 # Make Phyloseq object & Output final csvs
 
@@ -951,17 +953,9 @@ if(nrow(seqtab_final) > nrow(sample_data(ps))){
   message("Warning: the following samples were not included in phyloseq object, check sample names match the sample metadata")
   message(rownames(seqtab_final)[!rownames(seqtab_final) %in% sample_names(ps)])
 }
+saveRDS(ps, "output/rds/ps.rds")
 
-# Filter and agglomerate species
-ps0 <- ps %>%
-  subset_taxa(
-    phylum == "Arthropoda"
-  ) %>%
-  filter_taxa(function(x) mean(x) > 0, TRUE) %>%
-  prune_samples(sample_sums(.) >0, .) %>%
-  tax_glom("species")
 
-saveRDS(ps0, "output/rds/ps.rds")
 ```
 
 

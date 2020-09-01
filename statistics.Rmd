@@ -51,7 +51,11 @@ Extra comparisons:
                     "ape", 
                     "RColorBrewer",
                     "devtools",
-                    "ggthemes")
+                    "ggthemes",
+                    "phangorn",
+                    "ape",
+                    "ggtree",
+                    "ggcorrplot")
 .bioc_packages <- c("dada2",
                     "phyloseq", 
                     "DECIPHER",
@@ -74,9 +78,11 @@ sapply(c(.cran_packages,.bioc_packages), require, character.only = TRUE)
 devtools::install_github("mikemc/metacal")
 devtools::install_github("alexpiper/taxreturn")
 devtools::install_github("r-lib/conflicted")
+devtools::install_github("easystats/report")
 
 library(metacal)
 library(taxreturn)
+library(report)
 
 #Source helper functions
 source("R/helper_functions.R")
@@ -134,7 +140,185 @@ counts <- read_csv("R_analysis/FILE_for_R_NEW.csv") %>%
 # new counts
 ps <- readRDS("output/rds/ps.rds")
 
-newcounts <- ps %>%
+# Spread of reads between protocols
+pre_filt <- speedyseq::psmelt(ps) %>%
+  mutate(sample = sample_name %>% str_remove("_.*$"),
+         taxon = species %>% str_replace(" ", "_")) %>%
+  dplyr::select(OTU, taxon, sample_id, Abundance, sample, fcid, target_subfragment = pcr_primers, extraction_method) %>%
+  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% #Check this with francesco!
+  mutate(sample_id=case_when(
+    fcid=="CGK9B" ~ paste0(sample, "_1"),
+    fcid=="CJL7D" ~ paste0(sample, "_2")
+  ),
+  mixture_type = case_when(
+                  str_detect(sample, "^I[1-4]") ~ "QuickExtract",
+                  str_detect(sample, "^I[5-8]") ~ "DNEasy",
+                  str_detect(sample, "PCRpool") ~ "PCR",
+                  str_detect(sample, "^D[1-8]") ~ "DNA"
+                  ))  %>%
+  filter(Abundance > 0, !is.na(mixture_type))
+
+
+# Total reads per FCID
+pre_filt %>%
+  group_by(fcid) %>%
+  summarise(sum = sum(Abundance))
+
+# Total ASVs
+pre_filt %>%
+  summarise(ASVs = n_distinct(OTU))
+
+# Spread of Reads pre filtering
+pre_filt %>%
+  group_by(sample_id) %>%
+  summarise(Abundance = sum(Abundance), fcid)%>%
+  ungroup() %>%
+  summarise(mean = mean(Abundance), 
+            se = sd(Abundance)/sqrt(length(Abundance)),
+            max = max(Abundance),
+            min = min(Abundance))
+
+# Spread of OTUS pre filtering
+pre_filt %>%
+  group_by(sample_id) %>%
+  summarise(Abundance =  n_distinct(OTU), fcid)%>%
+  ungroup() %>%
+  summarise(mean = mean(Abundance), 
+            se = sd(Abundance)/sqrt(length(Abundance)),
+            max = max(Abundance),
+            min = min(Abundance))
+
+# Anova and pairwise comparisons of ASVs
+
+# Rarefy to even depths
+ps_rare <- rarefy_even_depth(ps, sample.size = min(100000),
+  rngseed = 666, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
+
+rarestats <- speedyseq::psmelt(ps) %>%
+  mutate(sample = sample_name %>% str_remove("_.*$"),
+         taxon = species %>% str_replace(" ", "_")) %>%
+  dplyr::select(OTU, taxon, sample_id, Abundance, sample, fcid, target_subfragment = pcr_primers, extraction_method) %>%
+  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% #Check this with francesco!
+  mutate(sample_id=case_when(
+    fcid=="CGK9B" ~ paste0(sample, "_1"),
+    fcid=="CJL7D" ~ paste0(sample, "_2")
+  ),
+  mixture_type = case_when(
+                  str_detect(sample, "^I[1-4]") ~ "QuickExtract",
+                  str_detect(sample, "^I[5-8]") ~ "DNEasy",
+                  str_detect(sample, "PCRpool") ~ "PCR",
+                  str_detect(sample, "^D[1-8]") ~ "DNA"
+                  ))  %>%
+  filter(Abundance > 0, !is.na(mixture_type))
+
+asv_rare_pre <- rarestats %>%
+  dplyr::filter(Abundance > 0) %>%
+  group_by(sample_id, mixture_type, fcid) %>%
+  summarise(counts = n_distinct(OTU)) %>%
+  ungroup() 
+
+asv_rare_pre %>%
+  group_by(mixture_type)%>%
+  summarise(mean = mean(counts), 
+            se = sd(counts)/sqrt(length(counts)),
+            max = max(counts),
+            min = min(counts))
+
+#ANOVA
+report(aov(counts ~mixture_type, data=asv_rare_pre))
+broom::tidy(TukeyHSD(aov(counts ~mixture_type, data=asv_rare_pre))) 
+
+# Remove run 2 quickextract
+rarestats2 <- speedyseq::psmelt(ps) %>%
+  mutate(sample = sample_name %>% str_remove("_.*$"),
+         taxon = species %>% str_replace(" ", "_")) %>%
+  dplyr::select(OTU, taxon, sample_id, Abundance, sample, fcid, target_subfragment = pcr_primers, extraction_method) %>%
+  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% #Check this with francesco!
+  mutate(sample_id=case_when(
+    fcid=="CGK9B" ~ paste0(sample, "_1"),
+    fcid=="CJL7D" ~ paste0(sample, "_2")
+  ),
+  mixture_type = case_when(
+                  str_detect(sample, "^I[1-4]") ~ "QuickExtract",
+                  str_detect(sample, "^I[5-8]") ~ "DNEasy",
+                  str_detect(sample, "PCRpool") ~ "PCR",
+                  str_detect(sample, "^D[1-8]") ~ "DNA"
+                  ))  %>%
+  filter(Abundance > 0, !is.na(mixture_type)) %>%
+  dplyr::filter(!(mixture_type=="QuickExtract" & fcid=="CJL7D")) 
+
+# Prefilt
+asv_rare_pre2 <- rarestats2 %>%
+  dplyr::filter(Abundance > 0) %>%
+  group_by(sample_id, mixture_type, fcid, target_subfragment) %>%
+  summarise(counts = n_distinct(OTU)) %>%
+  ungroup() 
+
+asv_rare_pre2 %>%
+  group_by(mixture_type)%>%
+  summarise(mean = mean(counts), 
+            se = sd(counts)/sqrt(length(counts)),
+            max = max(counts),
+            min = min(counts))
+
+#ANOVA
+
+#Mixture type
+report(aov(counts ~mixture_type, data=asv_rare_pre2))
+broom::tidy(TukeyHSD(aov(counts ~mixture_type, data=asv_rare_pre2))) 
+
+#Primers
+report(aov(counts ~target_subfragment, data=asv_rare_pre2))
+broom::tidy(TukeyHSD(aov(counts ~target_subfragment, data=asv_rare_pre2))) 
+
+# Post filt
+asv_rare_post <- rarestats2 %>%
+  filter(!is.na(taxon)) %>%
+  dplyr::filter(Abundance > 0) %>%
+  group_by(sample_id, mixture_type, fcid, target_subfragment) %>%
+  summarise(counts = n_distinct(OTU)) %>%
+  ungroup() 
+
+asv_rare_post %>%
+  group_by(mixture_type)%>%
+  summarise(mean = mean(counts), 
+            se = sd(counts)/sqrt(length(counts)),
+            max = max(counts),
+            min = min(counts))
+
+#ANOVA
+
+# Mixture type
+report(aov(counts ~mixture_type, data=asv_rare_post))
+broom::tidy(TukeyHSD(aov(counts ~mixture_type, data=asv_rare_post))) 
+
+#Primers
+report(aov(counts ~target_subfragment, data=asv_rare_post))
+broom::tidy(TukeyHSD(aov(counts ~target_subfragment, data=asv_rare_post))) 
+
+#Where is hte higher quickextract coming from
+haplotypes <- rarestats2 %>%
+  filter(!is.na(taxon)) %>%
+  group_by(mixture_type, target_subfragment, taxon) %>%
+  summarise(haplo = n_distinct(OTU)) %>%
+  pivot_wider(names_from = mixture_type, values_from=haplo)
+
+
+# Compare primers
+
+
+# Filter out unclassified and agglomerate species
+ps0 <- ps %>%
+  subset_taxa(
+    phylum == "Arthropoda"
+  ) %>%
+  filter_taxa(function(x) mean(x) > 0, TRUE) %>%
+  prune_samples(sample_sums(.) >0, .) %>%
+  tax_glom("species")
+
+saveRDS(ps0, "output/rds/ps_filtered.rds")
+
+newcounts <- ps0 %>%
   speedyseq::psmelt() %>%
   mutate(sample = sample_name %>% str_remove("_.*$"),
          taxon = species %>% str_replace(" ", "_")) %>%
@@ -389,7 +573,34 @@ joint <- joint %>%
   left_join(Fprimerdist) %>%
   left_join(Rprimerdist) %>%
   left_join(primergc) 
+
 ```
+
+## Create phylogeny
+```{r phylogeny}
+tree_alignment <- aligned[names(aligned) %in% joint$taxon]
+
+phang.align <- phyDat(as(tree_alignment, "matrix"), type="DNA")
+
+dm <- dist.ml(phang.align)
+
+#Fit NJ tree
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit <- pml(treeNJ, data=phang.align)
+
+#Fit ML tree
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+                      rearrangement = "stochastic", control = pml.control(trace = 0))
+
+tree <- fitGTR$tree
+
+ggtree(tree) + geom_tiplab()
+
+#Output newick tree
+write.tree(tree, file="output/tree.nwk")
+```
+
 
 
 ## Look at differences between runs
@@ -472,12 +683,21 @@ pdf(file="figs/supplementary/err_proportions.pdf", width = 11, height = 8 , pape
 try(dev.off(), silent=TRUE)
 
 # Visualise the error in all pairwise ratios
-gg.err_ratio <- joint %>%
+  
+err_ratio <- joint %>%
   dplyr::filter(exp_individuals > 0 ) %>%
+  #filter(!taxon=="Bradysia_nr.ocellaris") %>%
   dplyr::mutate(Taxon = taxon %>%
                  str_replace("^.+_", paste0(str_extract(taxon, "."), "_"))) %>%
     compute_ratios(group_vars = c("sample_id", "mixture_type", "target_subfragment")) %>%
-  mutate(Pair = paste(Taxon.x, Taxon.y, sep = ":")) %>% 
+  mutate(Pair = paste(Taxon.x, Taxon.y, sep = ":"))
+
+# Mean error ratios
+err_ratio %>% 
+  group_by(mixture_type, target_subfragment) %>%
+  summarise(mpr = mean(err_individuals, na.rm=TRUE))
+
+gg.err_ratio <- err_ratio %>% 
   ggplot(aes(Pair, err_individuals, colour=sample_id)) +
   geom_jitter(alpha=0.7) +
   geom_hline(yintercept = 1) +
@@ -799,7 +1019,7 @@ boot_models <- boots %>%
       mutate(lm_obj = map(splits, ~lm(center_elts(observed0 / exp_individuals) ~ 0 + taxon, data = .)), #why cant i use lm spec here?
             pred = map2(lm_obj, splits, function(.model, .data) predict(.model, .data)),
             coef_info = map(lm_obj, tidy),
-            aug = map(lm_obj, broom::augment),
+            #aug = map(lm_obj, broom::augment),
             data = map(splits, function(y){
               as.data.frame(y) %>%
                 dplyr::select(observed, count, mixture_type, sample_id, taxon, exp_individuals)})
@@ -823,10 +1043,6 @@ boot_coefs <- boot_models %>%
     dplyr::select(!where(is.list))
 
 
-# Final model fits
-
-# How to get the original data from the bootstraps?
-
 #results
 boot_results <- boot_models%>% 
   purrr::map(function(x){ 
@@ -844,21 +1060,33 @@ boot_results <- boot_models%>%
   mutate_at(vars(predicted, observed, exp_individuals), ~ . / sum(., na.rm=TRUE) ) %>% #re-close elements
   dplyr::select(!where(is.list))
 
+# Visualise fits of predicted proportions
+
 # Get RMSE
-final_error <- boot_results %>%
+final_rmse <- boot_results %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   group_by(target_subfragment, mixture_type) %>%
   rmse(truth = observed, estimate = predicted) #could also do somethign  else here
+
+final_anorm <- boot_results %>%
+   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  group_by(target_subfragment, mixture_type, id ) %>%
+    summarise(Adist = anorm(observed / predicted))  %>%
+  group_by(target_subfragment, mixture_type) %>%
+  summarise(Adist = mean(Adist))
+
 
 # Visualise fits to data
 gg.final_fits <- boot_results %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   ggplot(aes(logit(predicted), logit(observed))) +
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  geom_text(data=final_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
+  geom_text(data=final_rmse, aes(x=-12, y=1, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE, hjust = 0)+
+  geom_text(data=final_anorm, aes(x=-12, y=-1, label=paste0("A.dist: ",round(Adist, 2))),check_overlap = TRUE, inherit.aes = FALSE, hjust = 0)+
  stat_density_2d(geom = "polygon", aes(alpha = ..level.., fill = taxon))+
   facet_grid(target_subfragment~mixture_type) +
   scale_fill_manual(values = colours.taxon) +
+  scale_colour_manual(values = colours.taxon) +
   base_theme +
   theme(panel.grid = element_line(size = rel(1))) +
   scale_alpha_continuous(range=c(0.3, 0.9))+
@@ -868,14 +1096,21 @@ gg.final_fits <- boot_results %>%
         legend.text = element_text(face="italic")) +
     labs(x = "Bias model prediction (log-odds)", 
         y = "Observed proportions (log-odds)",
-        colour = "Taxon")+
+        fill = "Taxon", 
+        colour= NULL)+
   coord_cartesian(xlim = c(-12,3), ylim = c( -12, 3))
 
-## Visualise errors in proportions
-prop_error <- joint %>%
+## Visualise errors in unmodelled proportions
+prop_rmse <- joint %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   group_by(target_subfragment, mixture_type) %>%
   rmse(truth = expected, estimate = observed) #could also do somethign  else here
+
+
+prop_anorm <- joint %>%
+   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+  group_by(target_subfragment, mixture_type) %>%
+    summarise(Adist = anorm(observed / expected)) 
 
 
 gg.err_prop <- joint%>%
@@ -883,7 +1118,8 @@ gg.err_prop <- joint%>%
   mutate_at(vars(observed, expected, exp_individuals), logit) %>%
   ggplot(aes(exp_individuals,observed, color = taxon)) + 
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  geom_text(data=prop_error, aes(x=-9, y=0, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE)+
+  geom_text(data=prop_rmse, aes(x=-12, y=1, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE, hjust = 0)+
+  geom_text(data=prop_anorm, aes(x=-12, y=-1, label=paste0("A.dist: ",round(Adist, 2))),check_overlap = TRUE, inherit.aes = FALSE, hjust = 0)+
   geom_point(alpha=0.5) +
   scale_colour_manual(values = colours.taxon) +
   facet_grid(target_subfragment~mixture_type) +
@@ -1062,8 +1298,9 @@ gg.ra_traj <- ra_traj %>%
   theme(panel.grid = element_blank(),
         panel.border = element_blank(),
         axis.line.y = element_line(),
-        strip.text = element_blank(),
+        strip.text.y = element_blank(),
         legend.position = "none")
+
 gg.ra_traj2 <- ra_traj %>%
   dplyr::filter(extract_type == "QuickExtract") %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
@@ -1085,7 +1322,7 @@ gg.ra_traj2 <- ra_traj %>%
   theme(panel.grid = element_blank(),
         panel.border = element_blank(),
         axis.line.y = element_line(),
-        strip.text = element_blank(),
+        strip.text.y = element_blank(),
         legend.position = "none")
  
 
@@ -1103,7 +1340,7 @@ try(dev.off(), silent=TRUE)
 
 ```
 
-# Next - model partitioned bias as a function of species traits
+# Trait effects
 
 How do specimen traits affect its efficiency
 
@@ -1192,186 +1429,107 @@ partition_fit <- error_preds %>%
 gg.bias_traits <- partition_fit %>%
   dplyr::mutate(term = str_replace(term, "(Intercept)", "exoskeleton_medium")) %>%
   drop_na() %>%
-  ggplot(aes(x=term, y=estimate)) + 
-  geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error), size=1)+
+  ggplot(aes(x=term, y=estimate, colour=estimate)) + 
+  geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error), size=0.5)+
   geom_hline(yintercept = 0)+
   facet_grid(mixture_type~step) +
-  coord_flip()
+  coord_flip()+
+  scale_color_distiller(palette="RdYlBu")+
+  base_theme+
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        #panel.border = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Trait",
+       y = "Coefficient")
 
-# A better comparison might be te residuals explained by the partitioned vs unpartitioned bias. Or the variance explained by each coefficient?
+gg.bias_traits
+# Plot traits on treee
 
-
-# Interestingly some nonsensical values are significant for some steps - ie primerdist is significant for extract
-# This could either be because of correlation/colinearity with a more important predictor, or show that bias has not been properly partitioned
-
-#%>%
-  mutate(signif = case_when(
-    p.value <0.05 ~ TRUE,
-    p.value > 0.05 ~ FALSE
-  ))
-
-#Fit for seperate partitions
-extract_fit <- error_preds %>%
-  filter(step=="extract") %>%
-  mutate(primerdist = Fdist + Rdist,
-         exoskeleton = as.factor(exoskeleton),
-         taxon = as.factor(taxon),
-         primerdist) %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, bias ~ 1 + exoskeleton + biomass_mm3 , data = .)),
-           coef_info = map(lm_obj, tidy),
-           vi = map(lm_obj, vip::vi)
-    )%>%
-  unnest(coef_info)%>%
-  #dplyr::select(!where(is.list))  %>%
-  mutate(signif = case_when(
-    p.value <0.05 ~ TRUE,
-    p.value > 0.05 ~ FALSE
-  ))
-
-## QUestion - what does surface mm2 represent?
-
-# PCR fit
-pcr_fit <- error_preds %>%
-  filter(step=="PCR") %>%
-  mutate(primerdist = Fdist + Rdist,
-         exoskeleton = as.factor(exoskeleton),
-         taxon = as.factor(taxon),
-         primerdist) %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, bias ~ 1 + primerdist  + `G|C` , data = .)),
-           coef_info = map(lm_obj, tidy),
-           vi = map(lm_obj, vip::vi)
-    )%>%
-  unnest(coef_info)%>%
-  #dplyr::select(!where(is.list))  %>%
-  mutate(signif = case_when(
-    p.value <0.05 ~ TRUE,
-    p.value > 0.05 ~ FALSE
-  ))
-
-# sequencing fit
-seq_fit <- error_preds %>%
-  filter(step=="seq") %>%
-  mutate(primerdist = Fdist + Rdist,
-         exoskeleton = as.factor(exoskeleton),
-         taxon = as.factor(taxon),
-         primerdist) %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, bias ~ 1 + primerdist  + `G|C` , data = .)),
-           coef_info = map(lm_obj, tidy),
-           vi = map(lm_obj, vip::vi)
-    )%>%
-  unnest(coef_info)%>%
-  #dplyr::select(!where(is.list))  %>%
-  mutate(signif = case_when(
-    p.value <0.05 ~ TRUE,
-    p.value > 0.05 ~ FALSE
-  ))
-
-```
-
-
-# Plot trait correlations
-```{r trait cor}
-library(corrplot)
-
-gg.trait_cor <- joint %>%
-    dplyr::select(dorsal_area_mm2, depth_mm,lateral_area_mm2, surface_mm2, biomass_mm3, exoskeleton, Fdist, Rdist, `G|C`) %>%
-    cor %>%
-    {.[order(abs(.[, 1]), decreasing = TRUE), 
-       order(abs(.[, 1]), decreasing = TRUE)]} %>%
-    corrplot(method = "number", type = "upper", mar = c(0, 0, 1.5, 0),
-            title = "Correlations between taxon traits")
-
-
-gg.trait_cor + gg.bias_traits
-```
-
-
-# PCA plot of whole composition through process
-
-Recreate process
-
-See CJ batteys spacetree plot for how to plot this: https://github.com/cjbattey/spacetree/blob/master/spacetree.R
-
-```{r}
-test <- joint %>%
-  dplyr::select(sample_id, taxon, exp_individuals, target_subfragment) %>%
+# Do primer mismatch for both, take the the GC from fwh
+trait_data <- error_preds %>%
+  filter(target_subfragment == "fwhF2-fwhR2n") %>%
+  mutate(primerdist = Fdist + Rdist) %>%
+  dplyr::select(taxon, surface_mm2, biomass_mm3, exoskeleton, primerdist_fwh = primerdist, `G|C`) %>%
   distinct() %>%
-  left_join(bias_steps %>%
-    pivot_wider(names_from = step,
-              values_from=starts_with("gm"))) %>%
-  group_by(extract_type, target_subfragment, sample_id) %>%
-  mutate(
-        T_Insects = exp_individuals,
-        T_DNA = T_Insects * gm_mean_extract, 
-        T_Amplicons = T_DNA * gm_mean_PCR, 
-        T_Libraries = T_Amplicons * gm_mean_seq,
-        ) %>%
-  dplyr::select(-starts_with("gm_"), -exp_individuals) %>%
-  mutate(taxon = fct_reorder(taxon, T_Libraries)) %>%
-  pivot_longer(starts_with("T_"),
-               names_to = "position",
-               values_to = "abundance"
-               ) %>%
-  mutate(position = position %>% str_remove("T_") %>%
-           factor(levels=c("Insects", "DNA", "Amplicons", "Libraries"))) %>%
-  mutate(abundance = clr(abundance))
+    left_join(error_preds %>%
+  filter(target_subfragment == "fwhF2-HexCOIR4") %>%
+  mutate(primerdist = Fdist + Rdist) %>%
+  dplyr::select(taxon, primerdist_hex = primerdist) %>%
+  distinct())
+  
+tree <- read.tree("output/tree.nwk")
 
-#PCA
-test2 <- test %>% 
-  ungroup %>%
-  pivot_wider(names_from = taxon,
-              values_from = abundance,
-              values_fill = list(abundance=0)) 
+p1 <- ggtree(tree) + 
+  #geom_tiplab() +
+  geom_tippoint(aes(colour=label), size=2 ) + 
+  scale_colour_manual(values = colours.taxon) +
+  theme(legend.position = "none")
 
 
-pca_rec <- recipe(~., data = test2) %>%
-  update_role(extract_type, target_subfragment, position, sample_id, new_role = "id") %>%
-  step_normalize(all_predictors()) %>%
-  step_pca(all_predictors())
+gg.traits <- trait_data %>%
+  magrittr::set_colnames(c("taxon", "Surface area", "Biomass", "Sclerotisation", "P1 mismatch", "GC percentage","P1 mismatch")) %>%
+  pivot_longer(cols=-taxon,
+               names_to="trait",
+               values_to="value") %>%
+  left_join(
+    p1$data %>%
+    dplyr::select(label, y) %>%    
+    dplyr::rename(taxon = label)
+    ) %>%
+  mutate(taxon = as.factor(taxon),
+         taxon=fct_reorder(taxon, y, sum)) %>%
+  mutate(trait = factor(trait, levels=c("Surface area", "Biomass", "Sclerotisation", "P1 mismatch", "P2 mismatch", "GC percentage"))) %>%
+  ggplot(aes(x=taxon, y=value, fill=taxon)) +
+  geom_col()+
+  facet_grid(~trait, scales="free") +
+  scale_fill_manual(values=colours.taxon) +
+  #scale_fill_brewer(palette="Spectral")+
+  coord_flip() +
+  base_theme+
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.border = element_blank(),
+        axis.line.y = element_line(),
+        #axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
 
-pca_prep <- prep(pca_rec)
 
-pca_prep
+# Plot correlation between traits
+corr <- round(cor(trait_data %>% column_to_rownames("taxon")), 1)
+gg.trait_cor <- ggcorrplot(corr, hc.order = TRUE, type = "upper",
+   outline.col = "white",
+   lab = TRUE,
+   colors = c("#4575b4", "#ffffbf", "#d73027"))+
+  base_theme+
+  theme(#panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.border = element_blank(),
+        axis.line.y = element_line(),
+        axis.line.x = element_line(),
+        #axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "right")
 
-#Look at contributions to components
-tidied_pca <- tidy(pca_prep,2) # 1 is for  step 1
+# Multifig
+  
+Fig3a <- p1 - gg.traits - gg.trait_cor 
 
-tidied_pca %>%
-  filter(component %in% paste0("PC", 1:5)) %>%
-  mutate(component = fct_inorder(component)) %>%
-  ggplot(aes(value, terms, fill = terms)) +
-  geom_col(show.legend = FALSE) +
-  facet_wrap(~component, nrow = 1) +
-  labs(y = NULL) 
 
-# Plot PCA
-juice(pca_prep) %>%
-  ggplot(aes(PC1, PC2, label = sample_id)) +
-  geom_point(aes(color = sample_id), alpha = 0.7, size = 2) +
-  geom_text(check_overlap = TRUE, hjust = "inward", family = "IBMPlexSans") +
-  facet_grid(~position) %>%
-  labs(color = NULL)
+Fig3 <- Fig3a / gg.bias_traits + plot_annotation(tag_levels = "A")
 
-# 3d PCA
+Fig3
 
-library(scatterplot3d)
-
-test3 <- juice(pca_prep) %>%
-  mutate(timepoint = case_when(
-    position=="Insects" ~ 1,
-    position=="DNA" ~ 2,
-    position=="Amplicons" ~ 3,
-    position=="Libraries" ~ 4
-  )) %>%
-  mutate(timepoint = as.factor(timepoint)) %>%
-  dplyr::select(-PC3, -PC4, -PC5)
-
-colors <- unname( colours.taxon[6:9])
-colors <- colors[as.numeric(test3$timepoint)]
-scatterplot3d(test3[,c(7,5,6)], grid=TRUE,pch=20, box=TRUE, color = colors )
+#Save figure
+pdf(file="figs/fig3_trait_effects.pdf", width = 11, height = 8 , paper="a4r")
+  plot(Fig3)
+try(dev.off(), silent=TRUE)
 ```
 
 
