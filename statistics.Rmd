@@ -77,7 +77,6 @@ sapply(c(.cran_packages,.bioc_packages), require, character.only = TRUE)
 # Github packages
 devtools::install_github("mikemc/metacal")
 devtools::install_github("alexpiper/taxreturn")
-devtools::install_github("r-lib/conflicted")
 devtools::install_github("easystats/report")
 
 library(metacal)
@@ -86,11 +85,9 @@ library(report)
 
 #Source helper functions
 source("R/helper_functions.R")
-```
 
 # Set a colour scheme & Define theme
 
-```{r pick colours}
 colours.taxon <- c(
   "Acizzia_alternata" = "#A6CEE3",
   "Acizzia_solanicola" = "#438FC0",
@@ -98,7 +95,7 @@ colours.taxon <- c(
   "Bactrocera_tryoni" = "#000000",
   "Bradysia_nr.ocellaris" = "#FFFF00",
   "Carpophilus_davidsoni" = "#9AD378",
-  "Carpophilus_nr.dimidiatus" = "#3EA534",
+  "Carpophilus_trucatus" = "#3EA534",
   "Diuraphis_noxia" = "#B29C71",
   "Drosophila_hydei" = "#F26B6B"  ,
   "Drosophila_melanogaster" = "#E52823",
@@ -110,34 +107,14 @@ colours.taxon <- c(
   "Scaptodrosophila_lativittata" = "#800080"
 ) 
 
-
 #Source themes
 source('R/themes.R')
 ```
 
-# Read in data & get summary statistics
+# get summary statistics
 
-```{R read in}
-counts <- read_csv("R_analysis/FILE_for_R_NEW.csv") %>%
-  janitor::clean_names() %>%
-  dplyr::mutate(sample_id = paste0(sample, "_", run),
-                mixture_type = case_when(
-                  str_detect(sample, "^I[1-4]") ~ "QuickExtract",
-                  str_detect(sample, "^I[5-8]") ~ "DNEasy",
-                  TRUE ~ mixture_type
-                  ),
-                target_subfragment = case_when(
-                  str_detect(sample, "P1$") ~ "fwhF2-fwhR2n",
-                  str_detect(sample, "P2$") ~ "fwhF2-HexCOIR4",
-                )) %>% 
-  mutate(taxon = taxon %>% 
-            str_replace("_dimidiatus", "_nr.dimidiatus") %>%
-            str_replace("hydeii", "hydei") %>%
-            str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")) %>%
-  dplyr::select(-table) 
-
-
-# new counts
+```{R phyloseq}
+# Read in new counts
 ps <- readRDS("output/rds/ps.rds")
 
 # Spread of reads between protocols
@@ -304,63 +281,54 @@ haplotypes <- rarestats2 %>%
   pivot_wider(names_from = mixture_type, values_from=haplo)
 
 
-# Compare primers
-
-
 # Filter out unclassified and agglomerate species
 ps0 <- ps %>%
   subset_taxa(
     phylum == "Arthropoda"
   ) %>%
   filter_taxa(function(x) mean(x) > 0, TRUE) %>%
-  prune_samples(sample_sums(.) >0, .) %>%
+  prune_samples(sample_sums(.) >0 , .) %>%
   tax_glom("species")
 
 saveRDS(ps0, "output/rds/ps_filtered.rds")
 
-newcounts <- ps0 %>%
+```
+
+
+```{r}
+ps0 <- readRDS("output/rds/ps_filtered.rds")
+
+ps_data <- ps0 %>%
   speedyseq::psmelt() %>%
   mutate(sample = sample_name %>% str_remove("_.*$"),
          taxon = species %>% str_replace(" ", "_")) %>%
-  dplyr::select(taxon, sample_id, Abundance, sample, fcid) %>%
+  dplyr::select(taxon, sample_id, Abundance, sample, fcid, target_subfragment = pcr_primers) %>%
   filter(Abundance > 0, !is.na(taxon)) %>%
-  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% #Check this with francesco!
+  filter(!str_detect(sample_id, "_1_[0-9]0_")) %>% 
   mutate(sample_id=case_when(
     fcid=="CGK9B" ~ paste0(sample, "_1"),
     fcid=="CJL7D" ~ paste0(sample, "_2")
-  ))
+  )) %>%
+  mutate(taxon = taxon %>% str_replace("nr.dimidiatus", "truncatus")) %>%
+  mutate(target_subfragment = target_subfragment %>% str_replace("fwhf2-HexCOIR4", "fwhF2-HexCOIR4"))
 
-combined_analysis <- counts %>% left_join(newcounts) %>%
+counts <- read_csv("sample_data/expected_counts.csv") %>%
+  dplyr::mutate(taxon = taxon %>%
+                  str_replace("hydeii", "hydei") %>%
+                  str_replace_all(" ", "_") %>%
+                  str_replace("dimidiatus", "truncatus")%>%
+                  str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")
+                  ) %>%
+  left_join(ps_data) %>%
   group_by(sample_id) %>%
   filter(!is.na(fcid)) %>%
   mutate(prop = Abundance) %>%
-  mutate_at(c("prop"),  ~ . / sum(., na.rm = TRUE) )
-
-# Check consistency between analyses
-gg.combined_analyses <- combined_analysis %>% 
-  dplyr::select(sample_id, taxon, prop, observed, fcid) %>%
-  mutate(observed = observed / 100) %>%
-  dplyr::rename(analysis1 = observed, analysis2 = prop) %>%
-  pivot_longer(starts_with("analysis"),
-               names_to="analysis",
-               values_to="Abundance") %>%
-  ggplot(aes(x = sample_id, y=Abundance, fill=taxon))+
-  geom_col(position="stack") +
-  facet_grid(analysis~fcid, scales="free", drop=TRUE) +
-  scale_fill_manual(values=colours.taxon)+ 
-  #scale_fill_brewer(palette="Paired") +
-  base_theme +
-  labs(x = "Sample", y="Relative Abundance", fill="Taxon")
-
-gg.combined_analyses
-
-
-# Replace old analysis with new
-counts <- combined_analysis %>%
-  dplyr::select(-observed, -count) %>%
+  mutate_at(c("prop"),  ~ . / sum(., na.rm = TRUE) ) %>%
+  ungroup() %>%
   dplyr::rename(observed = prop, count = Abundance) %>%
   dplyr::mutate(observed = replace_na(observed, 0),
-                count = replace_na(count, 0))
+                count = replace_na(count, 0),
+                run = sample_id %>% str_remove("^.*_"))
 
 # Check all are proportions  
 counts %>%
@@ -400,9 +368,8 @@ traits <- readxl::read_excel("biomass and hardness.xlsx")  %>%
                   str_replace("hydeii", "hydei") %>%
                   str_replace_all(" ", "_") %>%
                   str_remove_all("\\.")%>%
-                  str_replace("nr_dimidiatis", "nr.dimidiatus")%>%
+                  str_replace("nr_dimidiatis", "truncatus")%>%
                   str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")
-
                   ) %>%
   dplyr::mutate(exoskeleton = as.numeric(exoskeleton))
 
@@ -433,7 +400,19 @@ joint <- counts %>%
   mutate(observed0 = (count + 0.5) * (expected > 0)) %>% #Add a pseudocount
   mutate(err_biomass = observed0 / exp_individuals,
          err_individuals = observed0 / exp_individuals) %>%
-  ungroup() 
+  ungroup() %>%
+ group_by(sample_id) %>%
+ group_modify(~{
+    clr_denom_bio <- .x %>%
+     pull(err_biomass) %>%
+     gm_mean()
+   clr_denom_ind <- .x %>%
+     pull(err_individuals) %>%
+     gm_mean()
+   .x %>%
+     mutate(err_biomass = log(err_biomass / clr_denom_bio),
+            err_individuals = log(err_individuals / clr_denom_ind))
+ })
 
 # Check if any werent properly joined
 table(is.na(joint$exp_individuals))
@@ -485,10 +464,10 @@ primers <- tribble(
   "fwhF2",  "GGDACWGGWTGAACWGTWTAYCCHCC", "fwhR2n","GTRATWGCHCCDGCTARWACWGG",
   "fwhF2",  "GGDACWGGWTGAACWGTWTAYCCHCC", "HexCOIR4", "TATDGTRATDGCHCCNGC", 
   ) %>%
-    left_join(.$Fprimer %>% unique() %>% purrr::map(get_binding_position, coi_model, tryrc = TRUE, minscore=8) %>%
+    left_join(.$Fprimer %>% unique() %>% purrr::map(get_binding_position, coi_model, tryrc = TRUE, min_score=8) %>%
     bind_rows() %>%
     rename_all(. %>% paste0("F",.)), by="Fprimer") %>%
-    left_join(.$Rprimer %>% unique() %>% purrr::map(get_binding_position, coi_model, tryrc = TRUE, minscore=8) %>%
+    left_join(.$Rprimer %>% unique() %>% purrr::map(get_binding_position, coi_model, tryrc = TRUE, min_score=8) %>%
     bind_rows() %>%
     rename_all(. %>% paste0("R",.)), by="Rprimer")
 
@@ -503,12 +482,11 @@ names(primers.dna) <- c("fwhF2", "fwhR2n", "HexCOIR4")
 seqs <- c(seqs, primers.dna)
 
 # Trim seqs to Fprimer bind region and get primer edit distance
-aligned <- taxreturn::map_to_model(seqs, coi_model, minscore = 0, shave= TRUE, pad=TRUE, check_indels=FALSE, maxNs=Inf, cores=1, quiet=FALSE)
+aligned <- taxreturn::map_to_model(seqs, coi_model, min_score = 0, shave= TRUE, check_frame=FALSE, max_N=Inf, max_gap=Inf, kmer_threshold= 1, multithread=FALSE, quiet=FALSE, extra="fill")
 
 #Transform to DNAstringSet
-aligned <- aligned %>% as.list %>% as.character %>% lapply(., paste0, collapse = "") %>% 
-            unlist %>% DNAStringSet
-
+aligned <- DNAbin2DNAstringset(aligned) 
+  
 # Check alignment
 #BrowseSeqs(aligned)
 
@@ -602,7 +580,6 @@ write.tree(tree, file="output/tree.nwk")
 ```
 
 
-
 ## Look at differences between runs
 
 ```{r run differences}
@@ -610,7 +587,7 @@ write.tree(tree, file="output/tree.nwk")
 gg.runra <- joint %>%
   dplyr::filter(str_detect(sample_id, "^I")) %>%
   dplyr::select(sample, taxon, observed, run, mixture_type, expected, exp_individuals) %>%
-  pivot_longer(-c("sample", "taxon", "run", "mixture_type"),
+  pivot_longer(-c("sample_id", "sample", "taxon", "run", "mixture_type"),
                names_to="type",
                values_to="value") %>%
   mutate(run = paste0("Sequencing run ", run)) %>%
@@ -628,7 +605,7 @@ gg.runra <- joint %>%
 gg.runhmap <- joint %>%
   dplyr::filter(str_detect(sample_id, "^I")) %>%
   dplyr::select(sample, taxon, observed, run, mixture_type, expected, exp_individuals) %>%
-  pivot_longer(-c("sample", "taxon", "run", "mixture_type"),
+  pivot_longer(-c("sample_id", "sample", "taxon", "run", "mixture_type"),
                names_to="type",
                values_to="value") %>%
   mutate(run = paste0("Sequencing run ", run)) %>%
@@ -683,7 +660,6 @@ pdf(file="figs/supplementary/err_proportions.pdf", width = 11, height = 8 , pape
 try(dev.off(), silent=TRUE)
 
 # Visualise the error in all pairwise ratios
-  
 err_ratio <- joint %>%
   dplyr::filter(exp_individuals > 0 ) %>%
   #filter(!taxon=="Bradysia_nr.ocellaris") %>%
@@ -734,7 +710,6 @@ We will now estimate the bias using different conventional and CODA models
 Here we estimate bias as the arithmetic mean of the error in proportions
 
 ```{r mean proportions}
-# Compare these fits!  
 fit_prop <- joint %>%
   filter(expected > 0) %>%
   mutate(error = observed / exp_individuals) %>%
@@ -758,7 +733,6 @@ prop_results <- joint %>%
 
 Here we estimate bias using a simple linear regression model of the expected and observerd proportions. The model is fit seperately to each taxon and material type.
 
-
 ```{r simple lm}
 # Specify LM
 lm_spec <- linear_reg() %>%
@@ -781,7 +755,12 @@ lm_results <- fit_lm %>%
   mutate(
     predicted = .pred
   ) %>%
-    dplyr::select(!where(is.list))
+  ungroup() %>%
+  dplyr::select(!where(is.list))
+
+lm_results %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
 ```
 
 ## Complm
@@ -795,27 +774,67 @@ fit_complm <- joint %>%
   filter(exp_individuals > 0) %>%
   group_by(mixture_type, target_subfragment)  %>%
   nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, center_elts(observed0 / exp_individuals) ~ 0 + taxon, data = .)),
+  mutate(lm_obj = map(data, ~fit(lm_spec, err_individuals ~ 0 + taxon, data = .)),
            pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
            coef_info = map(lm_obj, tidy)
     )
+
+# Could i include this in a formula
+# For instance a different dummy variable for each type of community
+# Then get the coefficients for each
 
 #results
 complm_results <- fit_complm %>%
   unnest(pred, data) %>%
   dplyr::filter(exp_individuals > 0)%>% 
   mutate(
-    predicted = exp_individuals * .pred, 
-    estimated = .pred
+    predicted = exp_individuals * exp(.pred), 
+    estimated = exp(.pred)
   ) %>%
   group_by(sample_id) %>%
   mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+  ungroup() %>%
   dplyr::select(!where(is.list))
 
 complm_results %>%
   group_by(mixture_type, target_subfragment) %>%
   rmse(truth = observed, estimate = predicted)
 ```
+
+# COMPLM 2 
+
+```{R compositional regressions}
+fit_complm2 <- joint %>%
+  filter(exp_individuals > 0) %>%
+  group_by(target_subfragment)  %>%
+  nest() %>%
+  mutate(lm_obj = map(data, ~fit(lm_spec, err_individuals ~ 0 + taxon * mixture_type, data = .)),
+           pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
+           coef_info = map(lm_obj, tidy)
+    )
+
+# Could i include this in a formula as an interaction effect
+# For instance a different dummy variable for each type of community
+# Then get the coefficients for each
+
+#results
+complm_results <- fit_complm %>%
+  unnest(pred, data) %>%
+  dplyr::filter(exp_individuals > 0)%>% 
+  mutate(
+    predicted = exp_individuals * exp(.pred), 
+    estimated = exp(.pred)
+  ) %>%
+  group_by(sample_id) %>%
+  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+  ungroup() %>%
+  dplyr::select(!where(is.list))
+
+complm_results %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+```
+
 
 ## metacal
 
@@ -829,21 +848,37 @@ fit_metacal <- joint %>%
     nest() %>%
     mutate(
         fit = purrr::map(data, function(x){
-        err_mat <- x %>%
-          dplyr::select(sample_id, taxon, err_individuals)%>%
+        obs_mat <- x %>%
+          dplyr::select(sample_id, taxon, observed)%>%
           pivot_wider(id_cols= sample_id,
                       names_from = "taxon",
-                      values_from = "err_individuals",
-                      values_fill = list(err_individuals=NaN))%>%    
+                      values_from = "observed",
+                      values_fill = list(observed=0))%>%    
           column_to_rownames("sample_id") %>%
           as.matrix() 
-        rows_to_keep <- rowSums(err_mat, na.rm=TRUE) > 0
-        cols_to_keep <- colSums(err_mat, na.rm=TRUE) > 0
-        err_mat <- err_mat[rows_to_keep, cols_to_keep]
-        metacal::center(err_mat, method="proj", enframe=TRUE) %>%
-        magrittr::set_colnames(c("taxon", ".pred"))
+        
+        exp_mat <- x %>%
+          dplyr::select(sample_id, taxon, expected)%>%
+          pivot_wider(id_cols= sample_id,
+                      names_from = "taxon",
+                      values_from = "expected",
+                      values_fill = list(expected=0))%>%    
+          column_to_rownames("sample_id") %>%
+          as.matrix() 
+                
+       fit_mc <- estimate_bias(
+          obs_mat,
+          exp_mat, 
+          margin = 1, # samples as rows
+          boot = TRUE
+        ) %>%
+         summary()
+       out <- fit_mc$coefficients %>%
+         dplyr::rename(.pred = estimate)
+       return(out)
         })) %>%
     unnest(fit) 
+
 
 #results
 metacal_results <- joint %>%
@@ -855,11 +890,75 @@ metacal_results <- joint %>%
   )%>%
   group_by(sample_id) %>%
   mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+  ungroup() %>%
   dplyr::select(!where(is.list))
 
 metacal_results %>%
   group_by(target_subfragment, mixture_type) %>%
   rmse(truth = observed, estimate = predicted)
+
+```
+
+
+# FIDO
+
+Alternatively we can use the fido package from Justin silverman 
+
+```{R fido}
+fit_fido <- joint %>%
+   group_by(target_subfragment, mixture_type) %>%
+    nest() %>%
+    mutate(
+        fit = purrr::map(data, function(x){
+        obs_mat <- x %>%
+          dplyr::select(sample_id, taxon, observed)%>%
+          pivot_wider(id_cols= sample_id,
+                      names_from = "taxon",
+                      values_from = "observed",
+                      values_fill = list(observed=0))%>%    
+          column_to_rownames("sample_id") %>%
+          as.matrix() 
+        
+        exp_mat <- x %>%
+          dplyr::select(sample_id, taxon, expected)%>%
+          pivot_wider(id_cols= sample_id,
+                      names_from = "taxon",
+                      values_from = "expected",
+                      values_fill = list(expected=0))%>%    
+          column_to_rownames("sample_id") %>%
+          as.matrix() 
+                
+       fit_mc <- estimate_bias(
+          obs_mat,
+          exp_mat, 
+          margin = 1, # samples as rows
+          boot = TRUE
+        ) %>%
+         summary()
+       out <- fit_mc$coefficients %>%
+         dplyr::rename(.pred = estimate)
+       return(out)
+        })) %>%
+    unnest(fit) 
+
+
+#results
+metacal_results <- joint %>%
+  left_join(fit_metacal) %>%
+  dplyr::filter(exp_individuals> 0) %>% 
+  mutate(
+    predicted = exp_individuals * .pred,
+    estimated = .pred
+  )%>%
+  group_by(sample_id) %>%
+  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+  ungroup() %>%
+  dplyr::select(!where(is.list))
+
+metacal_results %>%
+  group_by(target_subfragment, mixture_type) %>%
+  rmse(truth = observed, estimate = predicted)
+
 ```
 
 # Evaluate model fits
@@ -1016,7 +1115,7 @@ boots <- purrr::map(lm_dat, bootstraps, times=1000, apparant=TRUE)
 boot_models <- boots %>% 
   purrr::map(function(x){ 
     x <- x %>%
-      mutate(lm_obj = map(splits, ~lm(center_elts(observed0 / exp_individuals) ~ 0 + taxon, data = .)), #why cant i use lm spec here?
+      mutate(lm_obj = map(splits, ~lm(err_individuals ~ 0 + taxon, data = .)), #why cant i use lm spec here?
             pred = map2(lm_obj, splits, function(.model, .data) predict(.model, .data)),
             coef_info = map(lm_obj, tidy),
             #aug = map(lm_obj, broom::augment),
@@ -1053,8 +1152,8 @@ boot_results <- boot_models%>%
   tidyr::separate(name, into=c("mixture_type", "target_subfragment"), sep=";") %>%
   dplyr::filter(exp_individuals > 0)%>% 
   mutate(
-    predicted = exp_individuals * pred, 
-    estimated = pred
+    predicted = exp_individuals * exp(pred), 
+    estimated = exp(pred)
   ) %>%
   group_by(sample_id, id) %>%
   mutate_at(vars(predicted, observed, exp_individuals), ~ . / sum(., na.rm=TRUE) ) %>% #re-close elements
