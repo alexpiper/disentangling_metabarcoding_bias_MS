@@ -194,8 +194,7 @@ seqateurs::bbmap_install(dest.dir = "bin")
 seqateurs::fastqc_install(dest.dir = "bin")
 
 #Install BLAST
-taxreturn::blast_install(dest.dir = "bin")
-
+taxreturn::blast_install(dest_dir = "bin")
 
 # Create directories
 if(!dir.exists("data")){dir.create("data", recursive = TRUE)}
@@ -768,18 +767,17 @@ message(paste(sum(seqtab_cut)/sum(seqtab_nochim),"of the abundance remaining aft
 
 
 #Filter for homology with the target marker
-model <- readRDS("reference/folmer_fullength_model.rds")
-
+model <- taxreturn::subset_model(readRDS("reference/folmer_fullength_model.rds"), primers = c("GGDACWGGWTGAACWGTWTAYCCHCC", "TATDGTRATDGCHCCNGC"))
 seqs <- DNAStringSet(colnames(seqtab_cut))
 names(seqs) <- colnames(seqtab_cut)
 
-phmm_filt <- taxreturn::map_to_model(seqs, minscore = 100, shave = FALSE, model = model)
-codon_filt <- codon_filter(phmm_filt)
+phmm_filt <- taxreturn::map_to_model(seqs, model = model, min_score = 100, min_length = 100, shave = FALSE, check_frame = TRUE, kmer_threshold = 0.5, k=5)
+codon_filt <- taxreturn::codon_filter(phmm_filt, genetic_code = "SGC4")
 
 seqtab_final <- seqtab_cut[,colnames(seqtab_cut) %in% names(codon_filt)]
-message(paste0("Identified ",
+message(paste0("Removed ",
                length(colnames(seqtab_cut))  - length(colnames(seqtab_final)),
-               " sequences containing stop codon out of ", length(colnames(seqtab_cut)) , " input sequences."))
+               " sequences that didnt match PHMM or contained stop codons out of ", length(colnames(seqtab_cut)) , " input sequences."))
 message(paste(sum(seqtab_final)/sum(seqtab_cut),"of the abundance remaining after removing seqs with stop codons "))
 
 saveRDS(seqtab_final, "output/rds/seqtab_final.rds")
@@ -833,7 +831,6 @@ pdf(paste0("output/logs/seqtab_length_dist.pdf"), width = 11, height = 8 , paper
 try(dev.off(), silent=TRUE)
 ```
 
-
 # Assign taxonomy
 
 Next we will use BLAST to assign our taxonomy to our mock communities using a local reference database
@@ -844,7 +841,6 @@ seqtab_final <- readRDS("output/rds/seqtab_final.rds")
 # Get sequences
 seqs <- insect::char2dna(colnames(seqtab_final))
 names(seqs) <- colnames(seqtab_final)
-
 
 result <- blast(query=seqs,db="reference/mock_spp2.fa", evalue=1e06) %>%
   dplyr::filter(!is.na(sseqid)) %>%
@@ -865,7 +861,7 @@ top_hit <- result %>%
     )) %>% 
   dplyr::select(OTU = qseqid, genus, species = binomial)
 
-db <- get_ncbi_lineage()
+db <- get_ncbi_taxonomy()
 
 heirarchy <- top_hit %>% 
   dplyr::select(genus) %>%
@@ -889,7 +885,6 @@ tax <- tibble::enframe(colnames(seqtab_final)) %>%
   distinct()
 
 # Check all the mock taxa are present
-
 mock_taxa <- c(
   "Acizzia_alternata",
   "Acizzia_solanicola",
@@ -921,9 +916,6 @@ tax %>%
   saveRDS("output/rds/tax.rds") 
 ```
 
-# Loo
-
-
 # Make Phyloseq object & Output final csvs
 
 Finally, we will merge the sequence table, taxonomy table, phylogenetic tree, and sample data into a single phyloseq object, filter low abundance taxa, and output summary CSV files and fasta files of the identified taxa
@@ -954,7 +946,6 @@ if(nrow(seqtab_final) > nrow(sample_data(ps))){
   message(rownames(seqtab_final)[!rownames(seqtab_final) %in% sample_names(ps)])
 }
 saveRDS(ps, "output/rds/ps.rds")
-
 
 ```
 
