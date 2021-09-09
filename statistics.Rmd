@@ -111,7 +111,7 @@ colours.taxon <- c(
 source('R/themes.R')
 ```
 
-# get summary statistics
+# Run summary statistics
 
 ```{R phyloseq}
 # Read in new counts
@@ -315,7 +315,9 @@ ps_data <- ps0 %>%
                   str_detect(sample, "PCRpool") ~ "PCR",
                   str_detect(sample, "^D[1-8]") ~ "DNA"
                   )) %>%
-  mutate(taxon = taxon %>% str_replace("nr.dimidiatus", "truncatus")) %>%
+  mutate(taxon = taxon %>% 
+           str_replace("nr.dimidiatus", "truncatus") %>%
+           str_replace("Psyllid_sp", "Acizzia_sp")) %>%
   mutate(target_subfragment = target_subfragment %>% str_replace("fwhf2-HexCOIR4", "fwhF2-HexCOIR4"))
 
 counts <- read_csv("sample_data/expected_counts.csv") %>%
@@ -323,7 +325,8 @@ counts <- read_csv("sample_data/expected_counts.csv") %>%
                   str_replace("hydeii", "hydei") %>%
                   str_replace_all(" ", "_") %>%
                   str_replace("dimidiatus", "truncatus")%>%
-                  str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")
+                  str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris") %>%
+                  str_replace("Psyllid_sp", "Acizzia_sp")
                   ) %>%
   dplyr::select(sample, taxon, expected, num_species) %>%
   left_join(ps_data) %>%
@@ -364,9 +367,9 @@ counts %>%
 ## Add species traits
 
 ```{r biomass transform}
-traits <- readxl::read_excel("biomass and hardness.xlsx")  %>%
+traits <- readxl::read_excel("biomass and hardness v2.xlsx", skip = 1)  %>%
   janitor::clean_names() %>%
-  dplyr::rename(taxon = species) %>%
+  dplyr::select(taxon = species, biomass_mm3 = volume_mm3, surface_mm2, exoskeleton = hardness) %>%
   filter(!is.na(taxon)) %>%
   dplyr::mutate(taxon = taxon %>%
                   str_replace("C\\.", "Carpophilus") %>%
@@ -376,16 +379,16 @@ traits <- readxl::read_excel("biomass and hardness.xlsx")  %>%
                   str_replace_all(" ", "_") %>%
                   str_remove_all("\\.")%>%
                   str_replace("nr_dimidiatis", "truncatus")%>%
-                  str_replace("Bradysia_ocellaris", "Bradysia_nr.ocellaris")
+                  str_replace("Bradysia_nr_ocellaris", "Bradysia_nr.ocellaris")
                   ) %>%
   dplyr::mutate(exoskeleton = as.numeric(exoskeleton))
 
 # Plot measured traits
 traits %>%
-  pivot_longer(-c("taxon", "order"), 
+  pivot_longer(-taxon, 
                names_to = "trait",
                values_to = "value") %>%
-  ggplot(aes(x=taxon, y=value, fill=order)) + 
+  ggplot(aes(x=taxon, y=value)) + 
   geom_col() +
   facet_grid(~trait) + 
   coord_flip() +
@@ -430,7 +433,13 @@ joint <- counts %>%
    .x %>%
      mutate(err_biomass = log(err_biomass / clr_denom_bio),
             err_individuals = log(err_individuals / clr_denom_ind))
- })
+ }) %>%
+  mutate(exoskeleton= case_when(
+           exoskeleton == 1 ~ "soft",
+           exoskeleton == 2 ~ "medium",
+           exoskeleton == 3 ~ "hard"
+         ))  %>%
+    mutate(exoskeleton = factor(exoskeleton, levels=c( "soft", "hard", "medium") ))
 
 # Check if any werent properly joined
 table(is.na(joint$exp_individuals))
@@ -490,11 +499,13 @@ primers <- tribble(
     rename_all(. %>% paste0("R",.)), by="Rprimer")
 
 # Read in sequences
-seqs <- insect::readFASTA("reference/mock_spp2.fa")
-names(seqs) <- names(seqs) %>% str_replace("Carpophilus_nr.dimidiatus", "Carpophilus_truncatus")
+seqs <- read.FASTA("reference/mock_spp2.fa")
+names(seqs) <- names(seqs) %>% 
+  str_replace("Carpophilus_nr.dimidiatus", "Carpophilus_truncatus")  %>%
+  str_replace("Psyllid_sp", "Acizzia_sp")
 
 # Add primers to seqs
-primers.dna <- insect::char2dna(c("GGDACWGGWTGAACWGTWTAYCCHCC", rc("GTRATWGCHCCDGCTARWACWGG"),rc("TATDGTRATDGCHCCNGC")))
+primers.dna <- char2DNAbin(c("GGDACWGGWTGAACWGTWTAYCCHCC", rc("GTRATWGCHCCDGCTARWACWGG"),rc("TATDGTRATDGCHCCNGC")))
 names(primers.dna) <- c("fwhF2", "fwhR2n", "HexCOIR4")
 
 #Join to seqs
@@ -571,8 +582,7 @@ joint <- joint %>%
   left_join(Rprimerdist) %>%
   left_join(primergc) 
 
-# Save out moleucular traits
-
+# Save moleucular traits
 mol_traits <- joint %>% 
   ungroup() %>%
   dplyr::select(taxon, target_subfragment) %>% 
@@ -670,7 +680,8 @@ try(dev.off(), silent=TRUE)
   
 # Remove the quickextract samples from run 2
 joint <- joint %>%
-  dplyr::filter(!(mixture_type=="QuickExtract" & run==2))
+  dplyr::filter(!(mixture_type=="QuickExtract" & run==2)) %>%
+  dplyr::filter(expected > 0)
 ```
 
 DNApools and PCR pools 1-4 and 5-8 arent exact replicates because of the extra species that were found
@@ -743,28 +754,95 @@ joint %>%
 
 We will now estimate the bias using different conventional and CODA models
 
+## Create test and training splits
+
+```{r training test split}
+# Make training / testing splits  ------------------------------------------------------------
+set.seed(666)
+
+joint_split <- joint  %>%
+  ungroup() %>%
+  dplyr::select(sample_id, mixture_type) %>%
+  distinct() %>%
+  initial_split(strata = mixture_type, prop = .8)
+  
+# Training set
+joint_train <- joint %>%
+  filter(sample_id %in% training(joint_split)$sample_id)
+  
+# Testing set
+joint_test <- joint %>%
+  filter(sample_id %in% testing(joint_split)$sample_id) 
+
+# Check for data leakage
+table(unique(joint_train$sample_id) %in% unique(joint_test$sample_id))
+table(unique(joint_test$sample_id) %in% unique(joint_train$sample_id))
+
+# Create Cross validation folds for model tuning 
+train_cv <- joint_train %>%
+  group_vfold_cv(v = 5, group = sample_id) #Ensures samples are kept together
+
+# Create full modelling data object
+model_df <- tibble(
+  full_data = list(joint),
+  train = list(joint_train),
+  test = list(joint_test),
+  cv = list(train_cv))
+
+```
+
 ## Mean proportions
 
 Here we estimate bias as the arithmetic mean of the error in proportions
 
 ```{r mean proportions}
-fit_prop <- joint %>%
-  filter(expected > 0) %>%
-  mutate(error = observed / exp_individuals) %>%
-  group_by(mixture_type, target_subfragment, taxon) %>%
-  summarise(.pred = mean(error))
-
-#results
-prop_results <- joint %>%
-  dplyr::filter(expected > 0) %>%
-  left_join(fit_prop) %>%
+# Learn correction factors from training set
+fit_prop <- model_df %>%
   mutate(
-    predicted = exp_individuals * .pred, 
-    observed = observed,
-    estimated = .pred
-  )%>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
+    model_obj = purrr::map(train, function(x){
+      x %>%
+        mutate(error = observed / exp_individuals) %>%
+        group_by(mixture_type, target_subfragment, taxon) %>%
+        summarise(.pred = mean(error))
+  }),
+  pred_train = purrr::map2(train, model_obj, function(x,y){
+    x %>%
+        left_join(y) %>%
+        mutate(
+        predicted = exp_individuals * .pred, 
+        observed = observed,
+        estimated = .pred
+      )%>%
+    group_by(sample_id) %>%
+    mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
+    
+  }),
+  pred_test = purrr::map2(test, model_obj, function(x,y){
+    x %>%
+        left_join(y) %>%
+        mutate(
+        predicted = exp_individuals * .pred, 
+        observed = observed,
+        estimated = .pred
+      )%>%
+    group_by(sample_id) %>%
+    mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
+  })
+  )
+  
+# See results on training set
+fit_prop %>%
+  unnest(pred_train)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+
+# See results on test_set
+fit_prop %>%
+  unnest(pred_test)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
 ```
 
 ## simple lm
@@ -777,28 +855,54 @@ lm_spec <- linear_reg() %>%
   set_engine(engine = "lm")
 lm_spec
 
-fit_lm <- joint %>%
-  filter(expected > 0) %>%
-  group_by(taxon, target_subfragment, mixture_type) %>%
-  nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, observed ~ 0 + exp_individuals, data = .)),
-           pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
-           coef_info = map(lm_obj, tidy)
-    ) %>%
-  unnest(coef_info)
-
-#results
-lm_results <- fit_lm %>%
-  unnest(pred, data) %>%
+# Learn correction factors from training set
+fit_lm <- model_df %>%
   mutate(
-    predicted = .pred
-  ) %>%
-  ungroup() %>%
-  dplyr::select(!where(is.list))
+    model_obj = purrr::map(train, function(x){
+      x  %>%
+        group_by(taxon, target_subfragment, mixture_type) %>%
+        nest() %>%
+        mutate(lm_obj = map(data, ~fit(lm_spec, observed ~ 0 + exp_individuals, data = .)),
+               coef_info = map(lm_obj, tidy)) %>%
+        unnest(coef_info)
+  }),
+  pred_train = purrr::map2(train, model_obj, function(x,y){
+      x %>% 
+        left_join(y) %>% 
+        mutate(
+          predicted = exp_individuals * estimate, 
+          observed = observed,
+          estimated = estimate
+        )%>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
+  }),
+  pred_test = purrr::map2(test, model_obj, function(x,y){
+      x %>% 
+        left_join(y) %>% 
+        mutate(
+          predicted = exp_individuals * estimate, 
+          observed = observed,
+          estimated = estimate
+        )%>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) 
+  }))
 
-lm_results %>%
+# See results on training set
+fit_lm %>%
+  unnest(pred_train)%>%
+    dplyr::select(!where(is.list)) %>%
   group_by(mixture_type, target_subfragment) %>%
   rmse(truth = observed, estimate = predicted)
+
+# See results on test_set
+fit_lm %>%
+  unnest(pred_test)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+
 ```
 
 ## Complm
@@ -809,18 +913,162 @@ Here we fit a simple linear model on the compositional difference between Observ
 
 NOTE: Fitting a split sample regression as below (grouped by mixture type) is analogous to fitting a fully interaction regression (i.e. taxon * mixture_type)
 
+
 ```{R compositional regressions}
-fit_complm <- joint %>%
+# Specify complm spec
+complm_spec <- linear_reg() %>%
+  set_engine(engine = "lm")
+complm_spec
+
+# Learn correction factors from training set
+fit_complm <- model_df %>%
+  mutate(
+    model_obj = purrr::map(train, function(x){
+      x  %>%
+        group_by(target_subfragment, mixture_type) %>%
+        nest() %>%
+        mutate(lm_obj = map(data, ~fit(complm_spec, err_individuals ~ 0 + taxon, data = .)),
+               coef_info = map(lm_obj, tidy)) %>%
+        dplyr::select(-data)
+  }),
+  pred_train = purrr::map2(train, model_obj, function(x,y){
+      x %>%
+        group_by(target_subfragment, mixture_type) %>%
+        nest() %>%
+        left_join(y)  %>%
+        mutate(pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data))) %>%
+        unnest(data, pred)%>% 
+        mutate(
+          predicted = exp_individuals * exp(.pred), 
+          estimated = exp(.pred)
+        ) %>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+        ungroup() %>%
+        dplyr::select(!where(is.list))
+  }),
+  pred_test = purrr::map2(test, model_obj, function(x,y){
+      x %>%
+        group_by(target_subfragment, mixture_type) %>%
+        nest() %>%
+        left_join(y)  %>%
+        mutate(pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data))) %>%
+        unnest(data, pred)%>% 
+        mutate(
+          predicted = exp_individuals * exp(.pred), 
+          estimated = exp(.pred)
+        ) %>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+        ungroup() %>%
+        dplyr::select(!where(is.list))
+  }))
+
+
+# See results on training set
+fit_complm %>%
+  unnest(pred_train)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+
+# See results on test_set
+fit_complm %>%
+  unnest(pred_test)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+
+## Make a plot for supplementary
+#
+## Get RMSE
+#complm_rmse <- complm_results %>%
+#  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+#  group_by(target_subfragment, mixture_type) %>%
+#  rmse(truth = observed, estimate = predicted) #could also do something  else here
+#
+## Visualise fits to data
+#gg.complm_fit <- complm_results %>%
+#  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
+#  ggplot(aes(x = predicted, y = observed)) +
+#  geom_abline(lty = 2, colour = "gray80", size = 1) +
+#  geom_text(data=complm_rmse, aes(x=0.1, y=0.8, label=paste0("RMSE: ",scales::percent(.estimate, accuracy=1))), #inherit.aes = FALSE, hjust = 1)+
+#  geom_point(aes(colour=taxon), alpha=0.5)+
+#  facet_grid(target_subfragment~mixture_type) +
+#  scale_colour_manual(values = colours.taxon) +
+#  base_theme +
+#  scale_y_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
+#                     breaks=c(0, 0.02, 0.05, 0.1, 0.25, 0.5, 1), limits=c(0,1), expand = c(0,0))+
+#  scale_x_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
+#                     breaks=c(0, 0.02, 0.05, 0.1, 0.25, 0.5, 1), limits=c(0,1), expand = c(0,0))+
+#  scale_alpha_continuous(range=c(0.3, 0.9))+
+#  theme(panel.grid.minor.x = element_blank(),
+#        panel.grid.minor.y = element_blank(),
+#        legend.position = "none",
+#        legend.text = element_text(face="italic")) +
+#  coord_fixed()+
+#    labs(x = "Bias model prediction", 
+#        y = "Observed proportions",
+#        fill = "Taxon", 
+#        colour= NULL)   
+#  
+#  
+##Save supplementary figure
+#pdf(file="figs/supplementary/complm_fits.pdf", width = 8, height = 8 , paper="a4r")
+#  plot(gg.complm_fit)
+#try(dev.off(), silent=TRUE)
+
+```
+
+## COMPLM2
+```{R compositional regressions}
+# Set up model and recipe
+lm_mod <- linear_reg(mode = "regression", penalty = tune(), mixture = tune()) %>%
+    set_engine("glmnet")
+        
+#create recipe
+lm_rec <- joint %>%
+  recipe(err_individuals ~ taxon +exoskeleton + biomass_mm3 + surface_mm2, Fdist +  Rdist +  `G|C`, data=joint) %>%
+  #update_role(sample_id, new_role = "ID") %>%
+  #update_role(target_subfragment, new_role = "ID") %>%
+  #update_role(exp_individuals, new_role = "ID") %>%
+  #update_role(mixture_type, new_role = "ID") %>%
+  step_zv(all_numeric(), -all_outcomes()) %>%
+  step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
+  step_lincomb(all_numeric(), -all_outcomes()) %>%
+  step_dummy(taxon, exoskeleton, one_hot=TRUE) %>%
+  step_normalize(all_numeric(), -all_outcomes()) 
+
+      
+# Fit within each group
+lm_wf <-  workflow() %>%
+      add_model(lm_mod) %>%
+      add_recipe(lm_rec)
+
+#Tune grid using a latin hypercube design
+cv <- joint %>%
+        group_vfold_cv(v = 5, group = sample_id) 
+
+model_tune <- tune_grid(lm_wf, resamples = cv, grid = 20)
+
+autoplot(model_tune)
+
+model_workflow <- finalize_workflow(lm_wf, model_tune %>% select_best("rmse"))
+tune_res <- collect_metrics(model_tune)
+
+fit_complm2 <- joint %>%
   filter(exp_individuals > 0) %>%
+  ungroup() %>%
   group_by(mixture_type, target_subfragment)  %>%
   nest() %>%
-  mutate(lm_obj = map(data, ~fit(lm_spec, err_individuals ~ 0 + taxon, data = .)),
-           pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
-           coef_info = map(lm_obj, tidy)
+  mutate(lm_obj = map(data, ~fit(model_workflow,data = .)),
+         pred = map2(lm_obj, data, function(.model, .data) predict(.model, .data)),
+         coef_info = map(lm_obj, tidy),
+         wf_fit = map(lm_obj, pull_workflow_fit)
     )
 
 #results
-complm_results <- fit_complm %>%
+complm2_results <- fit_complm2 %>%
   unnest(pred, data) %>%
   dplyr::filter(exp_individuals > 0)%>% 
   mutate(
@@ -832,24 +1080,24 @@ complm_results <- fit_complm %>%
   ungroup() %>%
   dplyr::select(!where(is.list))
 
-complm_results %>%
+complm2_results %>%
   group_by(mixture_type, target_subfragment) %>%
   rmse(truth = observed, estimate = predicted)
 
 # Make a plot for supplementary
 
 # Get RMSE
-complm_rmse <- complm_results %>%
+complm2_rmse <- complm2_results %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   group_by(target_subfragment, mixture_type) %>%
   rmse(truth = observed, estimate = predicted) #could also do somethign  else here
 
 # Visualise fits to data
-gg.complm_fit <- complm_results %>%
+gg.complm2_fit <- complm2_results %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   ggplot(aes(x = predicted, y = observed)) +
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  geom_text(data=complm_rmse, aes(x=0.1, y=0.8, label=paste0("RMSE: ",scales::percent(.estimate, accuracy=1))), inherit.aes = FALSE, hjust = 1)+
+  geom_text(data=complm2_rmse, aes(x=0.1, y=0.8, label=paste0("RMSE: ",scales::percent(.estimate, accuracy=1))), inherit.aes = FALSE, hjust = 1)+
   geom_point(aes(colour=taxon), alpha=0.5)+
   facet_grid(target_subfragment~mixture_type) +
   scale_colour_manual(values = colours.taxon) +
@@ -868,14 +1116,24 @@ gg.complm_fit <- complm_results %>%
         y = "Observed proportions",
         fill = "Taxon", 
         colour= NULL)   
-  
+
+gg.complm2_fit
   
 #Save supplementary figure
 pdf(file="figs/supplementary/complm_fits.pdf", width = 8, height = 8 , paper="a4r")
   plot(gg.complm_fit)
 try(dev.off(), silent=TRUE)
-
+  
+  
+fit_complm2 %>%
+  unnest(coef_info) %>%
+  dplyr::select(!where(is.list)) %>%
+  ggplot(aes(y = term, x = estimate))+
+  geom_point() +
+  facet_grid(target_subfragment~mixture_type )+
+  geom_vline(xintercept = 0)
 ```
+
 
 ## metacal
 
@@ -884,123 +1142,88 @@ Here we use the bias estimation approach of *McLaren, M. R., Willis, A. D., & Ca
 This is a compositionally appropriate alternative to taking the arithmetic mean of errors in proportions as above.
 
 ```{R metacal}
-fit_metacal <- joint %>%
-   group_by(target_subfragment, mixture_type) %>%
-    nest() %>%
-    mutate(
-        fit = purrr::map(data, function(x){
-        obs_mat <- x %>%
-          dplyr::select(sample_id, taxon, observed)%>%
-          pivot_wider(id_cols= sample_id,
-                      names_from = "taxon",
-                      values_from = "observed",
-                      values_fill = list(observed=0))%>%    
-          column_to_rownames("sample_id") %>%
-          as.matrix() 
-        
-        exp_mat <- x %>%
-          dplyr::select(sample_id, taxon, expected)%>%
-          pivot_wider(id_cols= sample_id,
-                      names_from = "taxon",
-                      values_from = "expected",
-                      values_fill = list(expected=0))%>%    
-          column_to_rownames("sample_id") %>%
-          as.matrix() 
-                
-       fit_mc <- estimate_bias(
-          obs_mat,
-          exp_mat, 
-          margin = 1, # samples as rows
-          boot = TRUE
-        ) %>%
-         summary()
-       out <- fit_mc$coefficients %>%
-         dplyr::rename(.pred = estimate)
-       return(out)
-        })) %>%
-    unnest(fit) 
 
-
-#results
-metacal_results <- joint %>%
-  left_join(fit_metacal) %>%
-  dplyr::filter(exp_individuals> 0) %>% 
+# Learn correction factors from training set
+fit_metacal <- model_df %>%
   mutate(
-    predicted = exp_individuals * .pred,
-    estimated = .pred
-  )%>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
-  ungroup() %>%
-  dplyr::select(!where(is.list))
+    model_obj = purrr::map(train, function(x){
+      x %>%
+        group_by(target_subfragment, mixture_type) %>%
+        nest() %>%
+        mutate(
+            fit = purrr::map(data, function(x){
+            obs_mat <- x %>%
+              dplyr::select(sample_id, taxon, observed)%>%
+              pivot_wider(id_cols= sample_id,
+                          names_from = "taxon",
+                          values_from = "observed",
+                          values_fill = list(observed=0))%>%    
+              column_to_rownames("sample_id") %>%
+              as.matrix() 
+            
+            exp_mat <- x %>%
+              dplyr::select(sample_id, taxon, expected)%>%
+              pivot_wider(id_cols= sample_id,
+                          names_from = "taxon",
+                          values_from = "expected",
+                          values_fill = list(expected=0))%>%    
+              column_to_rownames("sample_id") %>%
+              as.matrix() 
+                    
+           trained_mc <- estimate_bias(
+              obs_mat,
+              exp_mat, 
+              margin = 1, # samples as rows
+              boot = TRUE
+            ) %>%
+             summary()
+           out <- trained_mc$coefficients %>%
+             dplyr::rename(.pred = estimate)
+           return(out)
+            })) %>%
+        unnest(fit) 
+  }),
+  pred_train = purrr::map2(train, model_obj, function(x,y){
+      x %>%
+        left_join(y) %>%
+        mutate(
+          predicted = exp_individuals * .pred,
+          estimated = .pred
+        ) %>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+        ungroup() %>%
+        dplyr::select(!where(is.list))
+  }),
+  pred_test = purrr::map2(test, model_obj, function(x,y){
+      x %>%
+        left_join(y) %>%
+        mutate(
+          predicted = exp_individuals * .pred,
+          estimated = .pred
+        )%>%
+        group_by(sample_id) %>%
+        mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
+        ungroup() %>%
+        dplyr::select(!where(is.list))
+  }))
 
-metacal_results %>%
-  group_by(target_subfragment, mixture_type) %>%
+# See results on training set
+fit_metacal %>%
+  unnest(pred_train)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
+  rmse(truth = observed, estimate = predicted)
+
+# See results on test_set
+fit_metacal %>%
+  unnest(pred_test)%>%
+    dplyr::select(!where(is.list)) %>%
+  group_by(mixture_type, target_subfragment) %>%
   rmse(truth = observed, estimate = predicted)
 
 ```
 
-
-# FIDO
-
-Alternatively we can use the fido package from Justin silverman 
-
-```{R fido}
-fit_fido <- joint %>%
-   group_by(target_subfragment, mixture_type) %>%
-    nest() %>%
-    mutate(
-        fit = purrr::map(data, function(x){
-        obs_mat <- x %>%
-          dplyr::select(sample_id, taxon, observed)%>%
-          pivot_wider(id_cols= sample_id,
-                      names_from = "taxon",
-                      values_from = "observed",
-                      values_fill = list(observed=0))%>%    
-          column_to_rownames("sample_id") %>%
-          as.matrix() 
-        
-        exp_mat <- x %>%
-          dplyr::select(sample_id, taxon, expected)%>%
-          pivot_wider(id_cols= sample_id,
-                      names_from = "taxon",
-                      values_from = "expected",
-                      values_fill = list(expected=0))%>%    
-          column_to_rownames("sample_id") %>%
-          as.matrix() 
-                
-       fit_mc <- estimate_bias(
-          obs_mat,
-          exp_mat, 
-          margin = 1, # samples as rows
-          boot = TRUE
-        ) %>%
-         summary()
-       out <- fit_mc$coefficients %>%
-         dplyr::rename(.pred = estimate)
-       return(out)
-        })) %>%
-    unnest(fit) 
-
-
-#results
-metacal_results <- joint %>%
-  left_join(fit_metacal) %>%
-  dplyr::filter(exp_individuals> 0) %>% 
-  mutate(
-    predicted = exp_individuals * .pred,
-    estimated = .pred
-  )%>%
-  group_by(sample_id) %>%
-  mutate_at(vars(predicted), ~ . / sum(., na.rm=TRUE) ) %>%
-  ungroup() %>%
-  dplyr::select(!where(is.list))
-
-metacal_results %>%
-  group_by(target_subfragment, mixture_type) %>%
-  rmse(truth = observed, estimate = predicted)
-
-```
 
 # Evaluate model fits
 
@@ -1009,16 +1232,22 @@ Here we compare the accuracy of the bias estimation procedure by looking at the 
 To determine the models predictive ability to new data, we also determine these metrics for a seperate testing set of samples that the model was not trained on.
 
 ```{R model comparison}
-all_fits <- do.call("list", mget(grep("_results",names(.GlobalEnv),value=TRUE))) %>%
-  bind_rows(.id="model") 
+all_fits <- do.call("list", mget(grep("fit_",names(.GlobalEnv),value=TRUE))) %>%
+  bind_rows(.id="model")
+  #filter(!model == "boot_results")
 
-fits <- all_fits %>%
-  mutate(model = model %>%
-           str_remove("_results")) %>%
-  dplyr::select(model, taxon, mixture_type, target_subfragment, sample_id, run, exp_individuals, observed, predicted, estimated) 
+# Get all fits for training dataset
+all_train <- all_fits %>%
+  mutate(
+    model = model %>%
+    str_remove("fit_"))  %>%
+  unnest(pred_train)%>%
+  dplyr::select(!where(is.list)) %>%
+  dplyr::select(model, taxon, mixture_type, target_subfragment, sample_id,
+                run, exp_individuals, observed, predicted, estimated) 
 
 # Plot bias estimates
-gg.bias_ests <- fits %>%
+gg.ests_train <- all_train %>%
   ggplot(aes(taxon, y=estimated-1, fill=model, group=model)) +
     geom_col(position=position_dodge(width=0.9))+
     facet_grid(target_subfragment~mixture_type, scales="free") +
@@ -1027,21 +1256,42 @@ gg.bias_ests <- fits %>%
   labs(
     x = "Taxon",
     y = "Bias estimate",
-    fill="Model")
+    fill="Model",
+    title = "Training set")
 
-gg.bias_ests
+all_test <- all_fits %>%
+  mutate(
+    model = model %>%
+    str_remove("fit_"))  %>%
+  unnest(pred_test)%>%
+  dplyr::select(!where(is.list)) %>%
+  dplyr::select(model, taxon, mixture_type, target_subfragment, sample_id,
+                run, exp_individuals, observed, predicted, estimated) 
+
+gg.ests_test <- all_test %>%
+  ggplot(aes(taxon, y=estimated-1, fill=model, group=model)) +
+    geom_col(position=position_dodge(width=0.9))+
+    facet_grid(target_subfragment~mixture_type, scales="free") +
+  coord_flip() +
+  scale_fill_brewer(palette="Paired") +
+  labs(
+    x = "Taxon",
+    y = "Bias estimate",
+    fill="Model",
+    title = "Test set")
 
 #Save figure
 pdf(file="figs/model_comparisons/bias_estimates.pdf", width = 8, height = 11 , paper="a4")
-  plot(gg.bias_ests)
+  plot(gg.ests_train)
+  plot(gg.ests_test)
 try(dev.off(), silent=TRUE)
 ```
 
 ## How well do the bias models explain the data?
 
 ```{r model fits}
-# Visualise fits to data
-gg.bias_preds <- fits %>%
+# Visualise fits to training set
+gg.preds_train <- all_train %>%
   ggplot(aes(predicted, observed, color = taxon, shape=target_subfragment)) +
   geom_abline(lty = 2, colour = "gray80", size = 1) +
   geom_rangeframe(colour="black")+
@@ -1063,22 +1313,49 @@ gg.bias_preds <- fits %>%
     labs(x = "Bias model prediction", 
         y = "Observed proportions",
         fill = "Taxon", 
+        title = "Training set",
         colour= NULL) 
 
-gg.bias_preds
+gg.preds_train
+
+# Visualize fits to test set
+gg.preds_test <- all_test %>%
+  ggplot(aes(predicted, observed, color = taxon, shape=target_subfragment)) +
+  geom_abline(lty = 2, colour = "gray80", size = 1) +
+  geom_rangeframe(colour="black")+
+  geom_point(alpha = 0.5) +
+  coord_fixed() + 
+  facet_grid(mixture_type~model) +
+  scale_colour_manual(values = colours.taxon) +
+  base_theme +
+  theme(panel.grid = element_line(size = rel(1))) +
+  scale_y_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
+                     breaks=c(0, 0.02, 0.05, 0.1, 0.2, 0.5, 1), limits=c(0,1), expand = c(0,0))+
+  scale_x_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
+                     breaks=c(0, 0.02, 0.05, 0.1, 0.2, 0.5, 1), limits=c(0,1), expand = c(0,0))+
+  scale_alpha_continuous(range=c(0.3, 0.9))+
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position = "none",
+        legend.text = element_text(face="italic")) +
+    labs(x = "Bias model prediction", 
+        y = "Observed proportions",
+        fill = "Taxon", 
+        title = "Test set",
+        colour= NULL) 
+
+gg.preds_test
 
 #Save figure
 pdf(file="figs/model_comparisons/bias_preds.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.bias_preds)
+  plot(gg.preds_train)
+  plot(gg.preds_test)
 try(dev.off(), silent=TRUE)
 
-# Get RMSE
-error <- fits %>%
-  group_by(model, target_subfragment, mixture_type) %>%
-  rmse(truth = observed, estimate = predicted) #could also do somethign  else here
-
 # plot rmse
-gg.rmse <- error %>%
+gg.rmse_train <-  all_train %>%
+  group_by(model, target_subfragment, mixture_type) %>%
+  rmse(truth = observed, estimate = predicted) %>%
   filter(!model %in% c("fra", "fra2")) %>%
   ggplot(aes(x=model, y=.estimate, fill=model)) +
   geom_col() +
@@ -1086,31 +1363,44 @@ gg.rmse <- error %>%
   scale_fill_brewer(palette="Paired") +
   theme(axis.text.x = element_text(angle=45, hjust = 1)) +
   labs(x = "Model",
-       y = "RMSE")+
+       y = "RMSE",
+       title = "Training set")+
   theme(axis.text.x = element_text(angle=45, hjust = 1))
 
-gg.rmse
+# plot rmse
+gg.rmse_test <-  all_test %>%
+  group_by(model, target_subfragment, mixture_type) %>%
+  rmse(truth = observed, estimate = predicted) %>%
+  filter(!model %in% c("fra", "fra2")) %>%
+  ggplot(aes(x=model, y=.estimate, fill=model)) +
+  geom_col() +
+  facet_grid(target_subfragment~mixture_type) +
+  scale_fill_brewer(palette="Paired") +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  labs(x = "Model",
+       y = "RMSE",
+       title = "Test set")+
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
 
 #Save figure
 pdf(file="figs/model_comparisons/rmse.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.rmse)
+  plot(gg.rmse_train)
+  plot(gg.rmse_test)
 try(dev.off(), silent=TRUE)
 ```
 
 ## How well do the estimated bias recover the true composition
 
 ```{r calibration}
-cal <- fits %>%
+gg.cal_train <- all_train %>%
     ungroup() %>%
     dplyr::mutate(calibrated = observed / estimated) %>%
     group_by(sample_id, model) %>%
     mutate_at(vars(calibrated), ~ . / sum(., na.rm=TRUE) )  %>%
-    ungroup() 
-
-
-gg.cal <- ggplot(cal, aes(x=taxon, y= odds(calibrated) / odds(exp_individuals), shape=target_subfragment )) +
+    ungroup() %>%
+    ggplot(aes(x=taxon, y= odds(calibrated) / odds(exp_individuals), shape=target_subfragment )) +
     geom_hline(yintercept=1, alpha=0.8)+
-  geom_jitter(aes(x=taxon, y= odds(observed) / odds(exp_individuals)),
+    geom_jitter(aes(x=taxon, y= odds(observed) / odds(exp_individuals)),
               colour="grey", alpha=0.7, width = 0.1, height = 0)+
     geom_jitter(aes(colour = taxon),alpha=0.7, width = 0.1, height = 0) +
     geom_rangeframe(color = "black") + 
@@ -1119,16 +1409,44 @@ gg.cal <- ggplot(cal, aes(x=taxon, y= odds(calibrated) / odds(exp_individuals), 
     labs(x = "Taxon", 
         y = "Odds calbirated / expected",
         colour = "Taxon",
-        shape = "Primer pair") +
+        shape = "Primer pair",
+        title = "Training set") +
     coord_flip() +
-  scale_color_manual(values = colours.taxon) + 
+    scale_color_manual(values = colours.taxon) + 
     theme(legend.position = "bottom")
 
-gg.cal
+gg.cal_train
+
+gg.cal_test <- all_train %>%
+    ungroup() %>%
+    dplyr::mutate(calibrated = observed / estimated) %>%
+    group_by(sample_id, model) %>%
+    mutate_at(vars(calibrated), ~ . / sum(., na.rm=TRUE) )  %>%
+    ungroup() %>%
+    ggplot(aes(x=taxon, y= odds(calibrated) / odds(exp_individuals), shape=target_subfragment )) +
+    geom_hline(yintercept=1, alpha=0.8)+
+    geom_jitter(aes(x=taxon, y= odds(observed) / odds(exp_individuals)),
+              colour="grey", alpha=0.7, width = 0.1, height = 0)+
+    geom_jitter(aes(colour = taxon),alpha=0.7, width = 0.1, height = 0) +
+    geom_rangeframe(color = "black") + 
+    scale_y_log10() + 
+    facet_grid(mixture_type ~ model) +
+    labs(x = "Taxon", 
+        y = "Odds calbirated / expected",
+        colour = "Taxon",
+        shape = "Primer pair",
+        title = "Training set") +
+    coord_flip() +
+    scale_color_manual(values = colours.taxon) + 
+    theme(legend.position = "bottom")
+
+gg.cal_test
+
 
 #Save figure
 pdf(file="figs/model_comparisons/calibration.pdf", width = 11, height = 8 , paper="a4r")
-  plot(gg.cal)
+  plot(gg.cal_train)
+  plot(gg.cal_test)
 try(dev.off(), silent=TRUE)
 
 ```
@@ -1146,8 +1464,9 @@ When using geometric SD factor in conjunction with geometric mean, it should be 
 Therefore the estimated efficiencies are shown as the best estimate multiplied and divided by two geometric standard errors
 
 ```{r Final model}
-lm_dat <- joint %>%
-  filter(exp_individuals > 0) %>%
+lm_dat <- model_df %>%
+  unnest(full_data)%>%
+  dplyr::select(!where(is.list)) %>%
   group_by(mixture_type, target_subfragment) 
 
 group_name <- group_keys(lm_dat) %>%
@@ -1549,59 +1868,82 @@ error_preds <- joint %>%
   mutate(primerdist = Fdist  + Rdist) %>%
   dplyr::rename(bias = gm_mean)
 
-# Fit model
+# Fit bootstrapped model
 
-partition_fit <- error_preds %>%
+model_dat <- error_preds %>%
   ungroup()%>%
-  filter(target_subfragment=="fwhF2-fwhR2n") %>%
+  filter(target_subfragment=="fwhF2-fwhR2n") %>% # WHY SUBSET?
   mutate(primerdist = Fdist + Rdist) %>%
-  dplyr::select(bias, exoskeleton, biomass_mm3, primerdist, `G|C`, step, mixture_type) %>%
-  mutate(exoskeleton= case_when(
-           exoskeleton == 1 ~ "soft",
-           exoskeleton == 2 ~ "medium",
-           exoskeleton == 3 ~ "hard"
-         ))  %>%
-    mutate(exoskeleton = factor(exoskeleton, levels=c( "soft", "hard", "medium") ))%>%
+  dplyr::select(bias, exoskeleton, biomass_mm3, surface_mm2, primerdist, `G|C`, step, mixture_type) 
+
+# Tune 
+#lm_mod <- linear_reg(mode = "regression") %>%
+#    set_engine("lm")
+lm_mod <- linear_reg(mode = "regression", penalty = tune(), mixture = tune()) %>%
+set_engine("glmnet")
+
+#create recipe
+lm_rec <- model_dat %>%
+  recipe(bias ~ 0 + exoskeleton + biomass_mm3 + surface_mm2 + primerdist + `G|C`, data=model_dat) %>%
+  step_zv(all_numeric(), -all_outcomes()) %>%
+  #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
+  step_lincomb(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), one_hot=TRUE) %>%
+  step_normalize(all_numeric(), -all_outcomes())
+          
+cv <- model_dat %>%
+        vfold_cv(v = 5)
+
+wf <- workflow() %>%
+        add_model(lm_mod) %>%
+        add_recipe(lm_rec)
+
+model_tune <- tune_grid(wf, resamples = cv, grid = 20)
+
+autoplot(model_tune)
+
+model_workflow <- finalize_workflow(wf, model_tune %>% select_best("rmse"))
+tune_res <- collect_metrics(model_tune)
+
+partition_boot_fit <- model_dat %>%
   group_by(step, mixture_type)  %>% 
   nest() %>%
-  mutate(wf_fit = map(data, function(x){
-    df <- x
-    lm_mod <- linear_reg(mode = "regression") %>%
-      set_engine("lm")
-    
-    wf <- workflow() %>%
-      add_model(lm_mod)
-    #create recipe
-    lm_rec <- df %>%
-      recipe(bias ~ ., data=df) %>%
-      step_zv(all_numeric(), -all_outcomes()) %>%
-      step_normalize(all_numeric()) %>%
-      step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
-      step_lincomb(all_numeric(), -all_outcomes()) %>%
-      step_dummy(all_nominal(), one_hot=TRUE) 
-      
-    print(prep(lm_rec))
-    #fit workflow
-    wf %>%
-      add_recipe(lm_rec) %>%
-      fit(data = df) %>%
-      pull_workflow_fit() 
-  }),
-  coef_info = map(wf_fit, tidy)) %>%
+  mutate(
+    boots = purrr::map(data, bootstraps, times=10, apparant=TRUE),
+    coef_info = purrr::map(boots, function(x){
+    # Fit within each group
+    res <- x %>% 
+      mutate(models = purrr::map(splits, function(y){
+        # Fit within each bootstrap
+          model_workflow %>%
+            fit(data = analysis(y)) %>%
+            pull_workflow_fit() 
+            
+      }),
+      coef_info = map(models, tidy)) %>%
+      unnest(coef_info) %>%
+      dplyr::select(!where(is.list))
+    return(res)
+   })) %>%
   unnest(coef_info) %>%
   dplyr::select(!where(is.list)) 
 
-gg.bias_traits <- partition_fit %>%
+write_csv(partition_boot_fit, "output/csv/partition_boot.csv")
+
+gg.bias_traits <- partition_boot_fit %>%
   drop_na() %>%
   dplyr::mutate(term = term %>%
-                  str_replace("\\(Intercept\\)", "Medium exoskeleton") %>%
+                  #str_replace("\\(Intercept\\)", "GC%") %>%
+                  #str_replace("\\(Intercept\\)", "Medium exoskeleton") %>%
                   str_replace("exoskeleton_hard", "Hard exoskeleton") %>%
                   str_replace("exoskeleton_soft", "Soft exoskeleton") %>%
                   str_replace("`G\\|C`", "GC%") %>%
                   str_replace("primerdist", "Primer mismatch") %>%
                   str_replace("biomass_mm3", "Biomass") %>%
+                  str_replace("surface_mm2", "Surface Area") %>%
                   factor(levels = rev(c(
                     "Biomass",
+                    "Surface Area",
                     "Soft exoskeleton",
                     "Medium exoskeleton",
                     "Hard exoskeleton",
@@ -1620,9 +1962,11 @@ gg.bias_traits <- partition_fit %>%
              ))) %>%
   ggplot(aes(x=term, y=estimate, colour=estimate)) + 
   geom_hline(yintercept = 0, colour="grey40")+
-  geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error))+
+  stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
+  stat_summary(fun = mean, size=0.2)+
+  #geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error))+
   #geom_interval(aes(ymax = estimate+std.error, ymin=estimate-std.error), colour = "skyblue") +
-  facet_grid(mixture_type~step) +
+  facet_grid(mixture_type~step, scales="free_x") +
   coord_flip()+
   scale_color_viridis_c(option = "D")+
   #scale_color_distiller(palette="RdYlBu")+
@@ -1639,12 +1983,30 @@ gg.bias_traits <- partition_fit %>%
 gg.bias_traits
 
 Fig3 <- gg.bias_traits
-
-
-# Convert these to stat_distributions as well
+# Why are the coefficients massive for the total protocol bias
 
 #Save figure
 pdf(file="figs/fig3_trait_effects.pdf", width = 8, height = 5)
   plot(Fig3)
 try(dev.off(), silent=TRUE)
+  
+  
+# Make a general plot of the effects
+  
+error_preds %>%
+  mutate(exoskeleton =case_when(
+    exoskeleton == "soft" ~ 1,
+    exoskeleton == "medium" ~ 2,
+    exoskeleton == "hard" ~ 3,
+  ))%>%
+  pivot_longer(c("biomass_mm3", "surface_mm2", "Fdist", "Rdist", "G|C", "exoskeleton"),
+               names_to="metric",
+               values_to="value")%>%
+  #filter(mixture_type  == "QuickExtract") %>%
+  ggplot(aes(x = bias, y = value, colour=taxon, shape=mixture_type))+
+  geom_point() +
+  facet_grid(metric~step, scales="free")
+
+# Think i need to do a lasso, or stepwise selection
+
 ```
