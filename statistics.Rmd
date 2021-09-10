@@ -135,6 +135,11 @@ pre_filt <- speedyseq::psmelt(ps) %>%
                   ))  %>%
   filter(Abundance > 0, !is.na(mixture_type))
 
+# Calculate classified and unclassified ASV's
+pre_filt %>%
+  mutate(classified = !is.na(taxon)) %>%
+  group_by(classified) %>%
+  summarise(abundance = sum(Abundance), number = n_distinct(OTU))
 
 # Total reads per FCID
 pre_filt %>%
@@ -1363,7 +1368,7 @@ lm_dat <- lm_dat %>%
   set_names(group_name)
 
 set.seed(606)
-boots <- purrr::map(lm_dat, bootstraps, times=10, apparant=TRUE)
+boots <- purrr::map(lm_dat, bootstraps, times=1000, apparant=TRUE)
 
 # Fit model to bootstraps
 boot_models <- boots %>% 
@@ -1680,6 +1685,7 @@ gg.ra_traj <- ra_traj %>%
         panel.grid.major.y = element_blank(),
         panel.grid.minor.x = element_blank(),
         panel.border = element_blank(),
+        axis.ticks  = element_line(colour = "grey20"),
         axis.line.y = element_line(),
         strip.text.y = element_blank(),
         legend.position = "none")
@@ -1715,6 +1721,7 @@ gg.ra_traj2 <- ra_traj %>%
         panel.grid.minor.x = element_blank(),
         panel.border = element_blank(),
         axis.line.y = element_line(),
+        axis.ticks  = element_line(colour = "grey20"),
         strip.text.y = element_blank(),
         legend.position = "none")
  
@@ -1759,7 +1766,7 @@ lm_mod <- linear_reg(mode = "regression") %>%
 
 #create recipe
 lm_rec <- model_dat %>%
-  recipe(bias ~ exoskeleton + biomass_mm3 +  primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
+  recipe(bias ~ exoskeleton + biomass_mm3+ surface_mm2 +  primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
   step_zv(all_numeric(), -all_outcomes()) %>%
   #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
   step_lincomb(all_numeric(), -all_outcomes()) %>%
@@ -1768,7 +1775,7 @@ lm_rec <- model_dat %>%
   step_intercept(value = 0)
 
 extraction_bias_rec <- model_dat %>%
-  recipe(bias ~ exoskeleton + biomass_mm3 , data=model_dat) %>% #surface_mm2 +
+  recipe(bias ~ exoskeleton + biomass_mm3 + surface_mm2, data=model_dat) %>% #surface_mm2 +
   step_zv(all_numeric(), -all_outcomes()) %>%
   #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
   step_lincomb(all_numeric(), -all_outcomes()) %>%
@@ -1798,7 +1805,7 @@ seq_bias_rec <- model_dat %>%
 partition_boot_fit <- model_dat %>%
   filter(!step == "seq") %>%
   mutate(recipe_type = step) %>%
-  group_by(step, mixture_type, id)  %>% 
+  group_by(step, mixture_type, id)  %>%  #id
   nest() %>%
   mutate(models = purrr::map(data, function(y){
       # fit seperate models
@@ -1830,9 +1837,14 @@ partition_boot_fit <- model_dat %>%
   unnest(coef_info) %>%
   dplyr::select(!where(is.list)) 
 
-gg.bias_traits <- partition_boot_fit %>%
-  filter(!(term == "(Intercept)" & step == "PCR")) %>%
+partition_boot_pctl <- partition_boot_fit %>% 
   drop_na() %>%
+  group_by(term, step, mixture_type) %>% 
+  dplyr::do(rsample:::pctl_single(.$estimate, alpha = 0.05)) %>%
+  dplyr::ungroup()
+
+gg.bias_traits <- partition_boot_pctl %>%
+  filter(!(term == "(Intercept)" & step == "PCR")) %>% 
   dplyr::mutate(term = term %>%
                   #str_replace("\\(Intercept\\)", "GC%") %>%
                   str_replace("\\(Intercept\\)", "Medium exoskeleton") %>%
@@ -1861,23 +1873,24 @@ gg.bias_traits <- partition_boot_fit %>%
              "PCR bias",
              "Sequencing + onward bias"
              ))) %>%
-  ggplot(aes(x=term, y=estimate, colour=estimate)) + 
+  ggplot(aes(x=term, y=.estimate, colour=estimate)) + 
   geom_hline(yintercept = 0, colour="grey40")+
-  stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
-  stat_summary(fun = mean, size=0.2)+
-  #geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error))+
+  #stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
+  geom_pointrange(aes(ymax = .upper, ymin=.lower), colour = "skyblue")+
   #geom_interval(aes(ymax = estimate+std.error, ymin=estimate-std.error), colour = "skyblue") +
+  #stat_summary(fun = mean, size=0.2, colour="black")+
   facet_grid(mixture_type~step) + #, scales="free_x"
   coord_flip()+
   scale_color_viridis_c(option = "D")+
-  scale_y_continuous(trans=pseudo_log_trans(0.5), breaks=c(-25, -5, -2, -1, 0, 
-                                                           1, 2, 5, 25))+
+  scale_y_continuous(trans=pseudo_log_trans(1), breaks=c(-50, -15, -5, -1, 
+                                                           1, 5, 15, 50))+
   #scale_color_distiller(palette="RdYlBu")+
   base_theme +
   theme(#panel.grid.major.y = element_blank(),
         panel.grid.minor.y = element_blank(),
         panel.grid.minor.x = element_blank(),
         axis.text.x = element_text(angle  = 0, hjust = 0.5),
+        axis.ticks  = element_line(colour = "grey20"),
         #panel.border = element_blank(),
         legend.position = "none") + 
   labs(x = "Trait",
@@ -1910,7 +1923,13 @@ partition_boot_fit2 <- model_dat %>%
   unnest(coef_info) %>%
   dplyr::select(!where(is.list)) 
 
-gg.bias_traits2 <- partition_boot_fit2 %>%
+partition_boot_pctl2 <- partition_boot_fit2 %>% 
+  drop_na() %>%
+  group_by(term, step, mixture_type) %>% 
+  dplyr::do(rsample:::pctl_single(.$estimate, alpha = 0.05)) %>%
+  dplyr::ungroup()
+
+gg.bias_traits2 <- partition_boot_pctl2 %>%
   drop_na() %>%
   dplyr::mutate(term = term %>%
                   #str_replace("\\(Intercept\\)", "GC%") %>%
@@ -1940,27 +1959,30 @@ gg.bias_traits2 <- partition_boot_fit2 %>%
              "PCR bias",
              "Sequencing + onward bias"
              ))) %>%
-  ggplot(aes(x=term, y=estimate, colour=estimate)) + 
+  ggplot(aes(x=term, y=.estimate, colour=.estimate)) + 
   geom_hline(yintercept = 0, colour="grey40")+
-  stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
+  #stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
   stat_summary(fun = mean, size=0.2)+
-  #geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error))+
+  geom_pointrange(aes(ymax = .upper, ymin=.lower), colour = "skyblue")+
   #geom_interval(aes(ymax = estimate+std.error, ymin=estimate-std.error), colour = "skyblue") +
   facet_grid(mixture_type~step) + #, scales="free_x"
   coord_flip()+
   scale_color_viridis_c(option = "D")+
-  scale_y_continuous(trans=pseudo_log_trans(0.5), breaks=c(-25, -5, -2, -1, 0, 
-                                                           1, 2, 5, 25))+
+  scale_y_continuous(trans=pseudo_log_trans(1), breaks=c(-50, -15, -5, -1, 
+                                                           1, 5, 15, 50))+
   #scale_color_distiller(palette="RdYlBu")+
   base_theme +
   theme(#panel.grid.major.y = element_blank(),
         panel.grid.minor.y = element_blank(),
         panel.grid.minor.x = element_blank(),
         axis.text.x = element_text(angle  = 0, hjust = 0.5),
+        axis.ticks  = element_line(colour = "grey20"),
         #panel.border = element_blank(),
         legend.position = "none") + 
   labs(x = "Trait",
        y = "Regression coefficient")
+
+gg.bias_traits2
 
 #Save figure
 pdf(file="figs/fig3_trait_effects_allmodels.pdf", width = 8, height = 5)
