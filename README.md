@@ -1,8 +1,6 @@
-# Analysis for Martoni, Piper, Rodoni and Blacket (In prep)
+# Disentangling bias for non-destructive insect metabarcoding
 
-This repository contains the code required for reproducing the analyses presented in our manuscript:
-
-** Coming Soon **
+This repository contains the code required for reproducing the analyses presented in our manuscript: F. Martoni, A.M. Piper, B. Rodoni and M.J. Blacket: Disentangling bias for non-destructive insect metabarcoding. (In prep)
 
 ## Data
 
