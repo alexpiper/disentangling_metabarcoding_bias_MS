@@ -1,5 +1,5 @@
 ---
-title: "Bias Partion Manuscript"
+title: "Disentangling bias for non-destructive insect metabarcoding."
 subtitle: "Bioinformatic analysis"
 author: "A.M. Piper"
 date: "`r Sys.Date()`"
@@ -1034,16 +1034,4 @@ gg.separate_reads
 pdf(paste0("output/logs/read_tracker_separate.pdf"), width = 11, height = 8 , paper="a4r")
   gg.separate_reads
 try(dev.off(), silent=TRUE)
-```
-
-# Reproducability Receipt
-
-```{details, eval=TRUE, echo = FALSE, details.summary = 'Reproducability receipt'}
-# datetime
-Sys.time()
-
-#repository
-git2r::repository()
-
-sessioninfo::session_info()
 ```

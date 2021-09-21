@@ -1,5 +1,5 @@
 ---
-title: "Bias Partion Manuscript"
+title: "Disentangling bias for non-destructive insect metabarcoding."
 subtitle: "Statistical analysis"
 author: "A.M. Piper"
 date: "`r Sys.Date()`"
@@ -145,6 +145,15 @@ pre_filt %>%
 pre_filt %>%
   group_by(fcid) %>%
   summarise(sum = sum(Abundance))
+
+# Total reads per sample_id
+pre_filt %>%
+  group_by(fcid, sample_id) %>%
+  summarise(sum = sum(Abundance)) %>%
+  ggplot(aes(x = sample_id, y = sum))+
+  geom_col()+
+  facet_grid(~fcid, scales="free", drop=TRUE) +
+  base_theme
 
 # Total ASVs
 pre_filt %>%
@@ -372,7 +381,7 @@ counts %>%
 ## Add species traits
 
 ```{r biomass transform}
-traits <- readxl::read_excel("biomass and hardness v2.xlsx", skip = 1)  %>%
+traits <- readxl::read_excel("sample_data/biomass_and_hardness_v2.xlsx", skip = 1)  %>%
   janitor::clean_names() %>%
   dplyr::select(taxon = species, biomass_mm3 = volume_mm3, surface_mm2, exoskeleton = hardness) %>%
   filter(!is.na(taxon)) %>%
@@ -597,7 +606,7 @@ mol_traits <- joint %>%
   left_join(Rprimerdist) %>%
   left_join(primergc)
 
-write_csv(mol_traits, "molecular_traits.csv")
+write_csv(mol_traits, "sample_data/molecular_traits.csv")
 
 ```
 
@@ -1621,8 +1630,7 @@ gg.bias_steps <- bias_steps %>%
         panel.grid.minor.y = element_blank(),
         panel.grid.minor.x = element_blank(),
         axis.text.y = element_text(face ="italic"),
-        axis.text.x = element_text(angle=0, hjust=0.5),
-        legend.position = "none") +
+        axis.text.x = element_text(angle=0, hjust=0.5)) +
       labs(x = "Contribution of laboratory step",
          y = "Efficiency / geometric mean",
          colour = "Taxon",
@@ -1732,7 +1740,6 @@ Fig2 <- gg.bias_steps - Fig2a + plot_annotation(tag_levels = "A")
 
 Fig2
 
-
 #Save figure
 pdf(file="figs/fig2_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
   plot(Fig2)
@@ -1740,9 +1747,11 @@ try(dev.off(), silent=TRUE)
 
 ```
 
-# Trait effects 2:
+# Trait effects
 
-```{r}
+How do specimen traits affect its efficiency
+
+```{r trait effects }
 # Try predict on original bootstrappped one
 
 # Add species traits
@@ -1989,173 +1998,4 @@ pdf(file="figs/fig3_trait_effects_allmodels.pdf", width = 8, height = 5)
   plot(gg.bias_traits2)
 try(dev.off(), silent=TRUE)
   
-```
-
-
-
-# Trait effects
-
-How do specimen traits affect its efficiency
-
-```{R prediction on partitioned}
-#Predict seperated bias 
-error_preds <- joint %>%
-  left_join(bias_steps 
-            #%>%
-              #mutate(step = case_when(
-              #  extract_type == "DNEasy" & step == "extract" ~ "DNEasy",
-              #  extract_type == "QuickExtract" & step == "extract" ~ "QuickExtract",
-              #  TRUE ~ step
-              #)) %>%
-              #dplyr::filter(!(extract_type == "QuickExtract" & !step == "QuickExtract"))
-              ) %>%
-  filter(exp_individuals > 0, mixture_type %in% c("DNEasy", "QuickExtract")) %>%
-  mutate(primerdist = Fdist  + Rdist) %>%
-  dplyr::rename(bias = gm_mean)
-
-
-
-# Fit bootstrapped model
-
-model_dat <- error_preds %>%
-  ungroup()%>%
-  filter(target_subfragment=="fwhF2-fwhR2n") %>% # WHY SUBSET?
-  mutate(primerdist = Fdist + Rdist) %>%
-  dplyr::select(bias, exoskeleton, biomass_mm3, surface_mm2, primerdist, `G|C`, step, mixture_type) 
-
-# Tune 
-lm_mod <- linear_reg(mode = "regression") %>%
-    set_engine("lm")
-#lm_mod <- linear_reg(mode = "regression", penalty = tune(), mixture = tune()) %>%
-#set_engine("glmnet")
-
-#create recipe
-lm_rec <- model_dat %>%
-  recipe(bias ~ exoskeleton + biomass_mm3 +  primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
-  step_zv(all_numeric(), -all_outcomes()) %>%
-  #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
-  step_lincomb(all_numeric(), -all_outcomes()) %>%
-  step_dummy(all_nominal(), one_hot=TRUE) %>%
-  step_normalize(all_numeric(), -all_outcomes())
-
-cv <- model_dat %>%
-        vfold_cv(v = 5)
-
-wf <- workflow() %>%
-        add_model(lm_mod) %>%
-        add_recipe(lm_rec)
-
-#model_tune <- tune_grid(wf, resamples = cv, grid = 20)
-
-#autoplot(model_tune)
-
-#model_workflow <- finalize_workflow(wf, model_tune %>% select_best("rmse"))
-#tune_res <- collect_metrics(model_tune)
-
-model_workflow <- wf
-
-partition_boot_fit <- model_dat %>%
-  group_by(step, mixture_type)  %>% 
-  nest() %>%
-  mutate(
-    boots = purrr::map(data, bootstraps, times=10, apparant=TRUE),
-    coef_info = purrr::map(boots, function(x){
-    # Fit within each group
-    res <- x %>% 
-      mutate(models = purrr::map(splits, function(y){
-        # Fit within each bootstrap
-          model_workflow %>%
-            fit(data = analysis(y)) %>%
-            pull_workflow_fit() 
-            
-      }),
-      coef_info = map(models, tidy)) %>%
-      unnest(coef_info) %>%
-      dplyr::select(!where(is.list))
-    return(res)
-   })) %>%
-  unnest(coef_info) %>%
-  dplyr::select(!where(is.list)) 
-
-write_csv(partition_boot_fit, "output/csv/partition_boot.csv")
-
-gg.bias_traits <- partition_boot_fit %>%
-  drop_na() %>%
-  dplyr::mutate(term = term %>%
-                  #str_replace("\\(Intercept\\)", "GC%") %>%
-                  str_replace("\\(Intercept\\)", "Medium exoskeleton") %>%
-                  str_replace("exoskeleton_hard", "Hard exoskeleton") %>%
-                  str_replace("exoskeleton_soft", "Soft exoskeleton") %>%
-                  str_replace("`G\\|C`", "GC%") %>%
-                  str_replace("primerdist", "Primer mismatch") %>%
-                  str_replace("biomass_mm3", "Biomass") %>%
-                  str_replace("surface_mm2", "Surface Area") %>%
-                  factor(levels = rev(c(
-                    "Biomass",
-                    "Surface Area",
-                    "Soft exoskeleton",
-                    "Medium exoskeleton",
-                    "Hard exoskeleton",
-                    "Primer mismatch",
-                    "GC%")))) %>%
-  mutate(step = step %>% 
-           str_replace("all", "Total protocol bias") %>%
-           str_replace("extract", "Extraction bias") %>%
-           str_replace("PCR", "PCR bias") %>%
-           str_replace("seq", "Sequencing + onward bias") %>%
-           factor(levels = c(
-             "Total protocol bias",
-             "Extraction bias",
-             "PCR bias",
-             "Sequencing + onward bias"
-             ))) %>%
-  ggplot(aes(x=term, y=estimate, colour=estimate)) + 
-  geom_hline(yintercept = 0, colour="grey40")+
-  stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
-  stat_summary(fun = mean, size=0.2)+
-  #geom_pointrange(aes(ymax = estimate+std.error, ymin=estimate-std.error))+
-  #geom_interval(aes(ymax = estimate+std.error, ymin=estimate-std.error), colour = "skyblue") +
-  facet_grid(mixture_type~step, scales="free_x") + #
-  coord_flip()+
-  scale_color_viridis_c(option = "D")+
-  #scale_color_distiller(palette="RdYlBu")+
-  base_theme +
-  theme(#panel.grid.major.y = element_blank(),
-        panel.grid.minor.y = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        axis.text.x = element_text(angle  = 0, hjust = 0.5),
-        #panel.border = element_blank(),
-        legend.position = "none") + 
-  labs(x = "Trait",
-       y = "Regression coefficient")
-
-gg.bias_traits
-
-Fig3 <- gg.bias_traits
-# Why are the coefficients massive for the total protocol bias
-
-#Save figure
-pdf(file="figs/fig3_trait_effects.pdf", width = 8, height = 5)
-  plot(Fig3)
-try(dev.off(), silent=TRUE)
-  
-  
-# Make a general plot of the effects
-  
-error_preds %>%
-  mutate(exoskeleton =case_when(
-    exoskeleton == "soft" ~ 1,
-    exoskeleton == "medium" ~ 2,
-    exoskeleton == "hard" ~ 3,
-  ))%>%
-  pivot_longer(c("biomass_mm3", "surface_mm2", "Fdist", "Rdist", "G|C", "exoskeleton"),
-               names_to="metric",
-               values_to="value")%>%
-  #filter(mixture_type  == "QuickExtract") %>%
-  ggplot(aes(x = bias, y = value, colour=taxon, shape=mixture_type))+
-  geom_point() +
-  facet_grid(metric~step, scales="free")
-
-# Think i need to do a lasso, or stepwise selection
-
 ```
