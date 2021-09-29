@@ -22,22 +22,6 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
 ```
 
-# Introduction
-
-* Comparisons of models
-* Bias prediction using cofactors
-  + Once bias has been partitioned to its relevant stage, we can accurately predict things
-  + Can Extraction bias be predicted by scheletorization?
-  + Can PCR bias be predicted by amplicon GC content, or primer binding mismatch?
-  + Can library bias be predicted by PCR barcode?
-  
-
-Extra comparisons:
-* Modelling of bias from # individuals vs biomass
-* Modelling of contribution on partitioned vs non-partitioned bias
-  + This would allow making a point that you need to partition biases to accurately improve protocols 
-
-
 ## Load packages
 ```{r load packages}
 #Set required packages
@@ -611,6 +595,7 @@ write_csv(mol_traits, "sample_data/molecular_traits.csv")
 ```
 
 ## Create phylogeny
+
 ```{r phylogeny}
 tree_alignment <- aligned[names(aligned) %in% joint$taxon]
 
@@ -992,45 +977,6 @@ fit_complm %>%
     dplyr::select(!where(is.list)) %>%
   group_by(mixture_type, target_subfragment) %>%
   rmse(truth = observed, estimate = predicted)
-
-## Make a plot for supplementary
-#
-## Get RMSE
-#complm_rmse <- complm_results %>%
-#  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
-#  group_by(target_subfragment, mixture_type) %>%
-#  rmse(truth = observed, estimate = predicted) #could also do something  else here
-#
-## Visualise fits to data
-#gg.complm_fit <- complm_results %>%
-#  mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
-#  ggplot(aes(x = predicted, y = observed)) +
-#  geom_abline(lty = 2, colour = "gray80", size = 1) +
-#  geom_text(data=complm_rmse, aes(x=0.1, y=0.8, label=paste0("RMSE: ",scales::percent(.estimate, accuracy=1))), #inherit.aes = FALSE, hjust = 1)+
-#  geom_point(aes(colour=taxon), alpha=0.5)+
-#  facet_grid(target_subfragment~mixture_type) +
-#  scale_colour_manual(values = colours.taxon) +
-#  base_theme +
-#  scale_y_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
-#                     breaks=c(0, 0.02, 0.05, 0.1, 0.25, 0.5, 1), limits=c(0,1), expand = c(0,0))+
-#  scale_x_continuous(trans=pseudo_log_trans(0.01), labels=scales::percent_format(accuracy=1), 
-#                     breaks=c(0, 0.02, 0.05, 0.1, 0.25, 0.5, 1), limits=c(0,1), expand = c(0,0))+
-#  scale_alpha_continuous(range=c(0.3, 0.9))+
-#  theme(panel.grid.minor.x = element_blank(),
-#        panel.grid.minor.y = element_blank(),
-#        legend.position = "none",
-#        legend.text = element_text(face="italic")) +
-#  coord_fixed()+
-#    labs(x = "Bias model prediction", 
-#        y = "Observed proportions",
-#        fill = "Taxon", 
-#        colour= NULL)   
-#  
-#  
-##Save supplementary figure
-#pdf(file="figs/supplementary/complm_fits.pdf", width = 8, height = 8 , paper="a4r")
-#  plot(gg.complm_fit)
-#try(dev.off(), silent=TRUE)
 
 ```
 
@@ -1526,16 +1472,10 @@ final_rmse <- boot_results %>%
 
 # Visualise fits to data
 gg.final_fits <- boot_results %>%
-  #ungroup() %>%
-  #slice_sample(n=10000) %>%
-  #filter(id == "Bootstrap0001") %>%
   mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   ggplot(aes(x = predicted, y = observed)) +
   geom_abline(lty = 2, colour = "gray80", size = 1) +
-  #geom_text(data=final_rmse, aes(x=-12, y=1, label=paste0("RMSE: ",round(.estimate, 2))),check_overlap = TRUE, inherit.aes = FALSE, hjust = 0)+
-  #stat_density_2d_filled(geom = "polygon", aes(fill=..level..))+
   stat_density_2d(geom = "polygon", aes(alpha = ..level.., fill = taxon))+
-  #geom_point(aes(colour=taxon))+
   facet_grid(target_subfragment~mixture_type) +
   scale_fill_manual(values = colours.taxon) +
   scale_colour_manual(values = colours.taxon) +

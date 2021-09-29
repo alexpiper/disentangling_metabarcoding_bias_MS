@@ -57,8 +57,8 @@ ulimit -n 4000
 
 #Set up input and outputs - CHANGE THIS TO YOUR DATA FOLDER
 inputdir=/group/sequencing/190412_M03633_0313_000000000-CGK9B
-outputdir=/group/pathogens/Alexp/Metabarcoding/imappests/data/CGK9B
-samplesheet=/group/pathogens/Alexp/Metabarcoding/imappests/data/CGK9B/SampleSheet_CGK9B.csv
+outputdir=/group/pathogens/Alexp/Metabarcoding/bias_partition/data/CGK9B
+samplesheet=/group/pathogens/Alexp/Metabarcoding/bias_partition/data/CGK9B/SampleSheet_CGK9B.csv
 
 # convert samplesheet to unix format
 dos2unix $samplesheet
@@ -91,8 +91,8 @@ done
 
 #Set up input and outputs - CHANGE THIS TO YOUR DATA FOLDER
 inputdir=/group/sequencing/200203_M03633_0388_000000000-CJL7D
-outputdir=/group/pathogens/Alexp/Metabarcoding/imappests/data/CJL7D
-samplesheet=/group/pathogens/Alexp/Metabarcoding/imappests/data/CJL7D/SampleSheet_CJL7D.csv
+outputdir=/group/pathogens/Alexp/Metabarcoding/bias_partition/data/CJL7D
+samplesheet=/group/pathogens/Alexp/Metabarcoding/bias_partition/data/CJL7D/SampleSheet_CJL7D.csv
 
 # convert samplesheet to unix format
 dos2unix $samplesheet
