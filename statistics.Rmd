@@ -39,7 +39,12 @@ knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
                     "phangorn",
                     "ape",
                     "ggtree",
-                    "ggcorrplot")
+                    "ggcorrplot",
+                    "GGally",
+                    "ggstance",
+                    "ggdist",
+                    "distributional")
+
 .bioc_packages <- c("dada2",
                     "phyloseq", 
                     "DECIPHER",
@@ -70,26 +75,29 @@ library(report)
 #Source helper functions
 source("R/helper_functions.R")
 
-# Set a colour scheme & Define theme
-
+# Set a taxon colour scheme - Also use the order here to order species on later plots
 colours.taxon <- c(
-  "Acizzia_alternata" = "#A6CEE3",
-  "Acizzia_solanicola" = "#438FC0",
-  "Aphidius_colemani" = "#808080",
+  "Carpophilus_davidsoni" = "#9AD378",
+  "Carpophilus_truncatus" = "#3EA534",  
   "Bactrocera_tryoni" = "#000000",
   "Bradysia_nr.ocellaris" = "#FFFF00",
-  "Carpophilus_davidsoni" = "#9AD378",
-  "Carpophilus_truncatus" = "#3EA534",
-  "Diuraphis_noxia" = "#B29C71",
   "Drosophila_hydei" = "#F26B6B"  ,
   "Drosophila_melanogaster" = "#E52823",
   "Drosophila_simulans" = "#FE9C32",
-  "Lysiphlebus_testaceipes" = "#F08C3A",
+  "Scaptodrosophila_lativittata" = "#800080",
+  "Acizzia_alternata" = "#A6CEE3",
+  "Acizzia_solanicola" = "#438FC0",
+  "Acizzia_sp" = "#000080", 
+  "Diuraphis_noxia" = "#B29C71",
   "Metopolophium_dirhodum" = "#CAB2D6",
-  "Psyllid_sp" = "#000080",
   "Rhopalosiphum_padi" = "#FF00FF",
-  "Scaptodrosophila_lativittata" = "#800080"
+  "Aphidius_colemani" = "#808080",
+  "Lysiphlebus_testaceipes" = "#F08C3A"
 ) 
+
+# Make a version without underscores
+colours.taxon2 <- colours.taxon
+names(colours.taxon2) <- names(colours.taxon) %>% str_replace("_", " ")
 
 #Source themes
 source('R/themes.R')
@@ -618,12 +626,6 @@ p1 <- ggtree(tree) + geom_tiplab()
 
 #Output newick tree
 write.tree(tree, file="output/tree.nwk")
-
-# Get an arrangement from the tree to order things by
-taxa_order <- p1$data %>%
-  filter(!is.na(label)) %>%
-  arrange(y)%>%
-  pull(label)
 ```
 
 
@@ -643,9 +645,11 @@ gg.runra <- joint %>%
     geom_col(position="stack") +
     facet_grid(run~mixture_type, scales="free") +
     scale_fill_manual(values = colours.taxon) +
+    base_theme+
     theme(axis.text.x = element_text(angle=45, hjust=1),
           legend.position = "bottom") +
-    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(expand=c(0,0))+
+    scale_y_continuous(labels = scales::percent, expand=c(0,0)) +
     labs(x="Sample", y="Relative abundance")
 
 # Plot as heatmap
@@ -657,12 +661,18 @@ gg.runhmap <- joint %>%
                values_to="value") %>%
   mutate(run = paste0("Sequencing run ", run)) %>%
   dplyr::filter(type=="observed") %>%
-  mutate(value = na_if(value, 0)) %>%
+  mutate(value = na_if(value, 0),
+         taxon = str_replace_all(taxon, "_", " "),
+         taxon = factor(taxon, levels = rev(names(colours.taxon2)))) %>%
     ggplot(aes(x=sample, y=taxon, fill=value)) +
     geom_tile() +
     facet_grid(run~mixture_type, scales="free") +
+    base_theme+
     theme(axis.text.x = element_text(angle=45, hjust=1),
+          axis.text.y= element_text(face="italic"),
           legend.position = "bottom") +
+    scale_x_discrete(expand=c(0,0))+
+    scale_y_discrete(expand=c(0,0))+
     scale_fill_viridis_c(labels = scales::percent) +
     labs(x="Sample",
          y="Taxon",
@@ -1334,13 +1344,55 @@ boot_models <- boots %>%
         lm_obj = map(splits, ~lm(err_individuals ~ 0 + taxon, data = .)), #why cant i use lm spec here?
             pred = map2(lm_obj, splits, function(.model, .data) predict(.model, .data)),
             coef_info = map(lm_obj, tidy),
-            #aug = map(lm_obj, broom::augment),
+            aug = map(lm_obj, broom::augment),
             data = map(splits, function(y){
               as.data.frame(y) %>%
                 dplyr::select(observed, count, mixture_type, sample_id, taxon, exp_individuals)})
         ) 
     }) 
 
+#check the distribution of the bootstrapped residuals to see whether they are normally distributed
+boot_res <- boot_models %>% 
+  purrr::map(function(x){ 
+    x <- x %>%
+      unnest(aug)
+  })  %>%
+  bind_rows(.id="name") %>%
+  tidyr::separate(name, into=c("mixture_type", "target_subfragment"), sep=";") %>%
+  mutate(extract_type = case_when(
+      mixture_type=="DNEasy" ~ "DNEasy",
+      mixture_type=="QuickExtract" ~ "QuickExtract",
+      TRUE ~ "NA"
+    ))%>%
+    dplyr::select(!where(is.list))%>%
+  ungroup()
+
+# QQplot of residuals
+boot_res %>%
+  dplyr::slice_sample(n=100000) %>%
+  ggplot(aes(sample = .resid, group=taxon, colour=taxon)) +
+  stat_qq() + 
+  stat_qq_line(colour="black") +
+  facet_grid(taxon~target_subfragment)+
+  base_theme +
+  scale_colour_manual(values=colours.taxon)+
+  theme(legend.position = "none")
+
+# Density plot of residuals
+boot_res %>%
+  dplyr::slice_sample(n=100000) %>%
+  ggplot(aes(x = .resid, group=taxon, colour=taxon)) +
+  geom_density() +
+  facet_grid(taxon~target_subfragment)+
+  base_theme +
+  scale_colour_manual(values=colours.taxon)+
+  theme(legend.position = "none")
+
+# Shapiro wilks test
+shap_test <- boot_res %>%
+  group_by(taxon, target_subfragment) %>%
+  dplyr::slice_sample(n=5000) %>%
+  summarise(test = broom::tidy(shapiro.test(.resid)))
 
 # Get coefficients
 boot_coefs <- boot_models %>% 
@@ -1358,7 +1410,21 @@ boot_coefs <- boot_models %>%
     ))%>%
     dplyr::select(!where(is.list))%>%
   ungroup() %>%
+  mutate(log_est = estimate) %>%
   mutate(estimate = exp(estimate))
+
+# Plot uncertainty in bootstrapped coefficients
+boot_coefs %>%
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(x = taxon, y = log_est, fill=taxon)) +  
+  geom_hline(yintercept = 0, lty = 3) + 
+  #geom_line(alpha = 0.3, lwd = 1.2) + 
+  geom_violin()+
+  labs(y = "Coefficient", x = NULL) +
+  base_theme +
+  scale_fill_manual(values=colours.taxon)+
+  theme(legend.position = "none")
+
 
 ## Visualise errors in unmodelled proportions
 prop_rmse <- joint %>%
@@ -1390,16 +1456,12 @@ gg.err_prop <- joint %>%
 
 gg.err_prop
 
-colours.taxon2 <- colours.taxon
-names(colours.taxon2) <- names(colours.taxon) %>% str_replace("_", " ")
 
 # Could i make this a distribution of the bootstrap estimates, either a confidence range or violin plot
-library(ggdist)
-library(distributional)
 
 gg.final_ests <- boot_coefs  %>%
     group_by(taxon, target_subfragment, mixture_type) %>%
-    summarise(gm_quantiles(estimate, q = c(0.05, 0.25, 0.75, 0.95), na_rm=TRUE, wide=TRUE),
+    summarise(gm_quantiles(estimate, q = c(0.025, 0.25, 0.75, 0.975), na_rm=TRUE, wide=TRUE),
               gm_mean = metacal::gm_mean(estimate, na.rm=TRUE),
               gm_se = metacal::gm_sd(estimate, na.rm = TRUE)) %>%
     ungroup %>%
@@ -1407,10 +1469,10 @@ gg.final_ests <- boot_coefs  %>%
     mutate(mixture_type = factor(mixture_type, levels=c("QuickExtract", "DNEasy", "DNA", "PCR"))) %>%
   mutate(taxon = taxon %>% 
            str_replace("_", " ") %>%
-           factor(levels = taxa_order %>% str_replace("_", " "))) %>%
+           factor(levels = rev(names(colours.taxon2)))) %>%
   ggplot(aes(x=gm_mean , y=taxon, colour=taxon, fill=taxon))+ #
   geom_vline(xintercept = 1, colour="grey80" )  +
-  geom_interval(aes(xmin = gm_05, xmax =gm_95 ), alpha=0.5, size=3) +
+  geom_interval(aes(xmin = gm_025, xmax =gm_975 ), alpha=0.5, size=3) +
   geom_interval(aes(xmin = gm_25, xmax = gm_75 ), alpha=0.8, size=3) +
   geom_point(colour="black", shape=21)+
   scale_colour_manual(values = colours.taxon2) +
@@ -1446,8 +1508,7 @@ pdf(file="figs/fig1_bias.pdf", width = 8, height = 8 , paper="a4")
   plot(Fig1)
 try(dev.off(), silent=TRUE)
   
-  
-# SUpplementary figure - fit of bootstrapped bias model
+# SUpplementary figure 2 - fit of bootstrapped bias model
 boot_results <- boot_models%>% 
   purrr::map(function(x){ 
     x <- x %>%
@@ -1500,7 +1561,67 @@ gg.final_fits <- boot_results %>%
 pdf(file="figs/supplementary/bootstrap_fits.pdf", width = 8, height = 9 , paper="a4")
   plot(gg.final_fits)
 try(dev.off(), silent=TRUE)
+  
+# SUppleemntary table 1 - Overall model fits
+# Function to make p values
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
 
+# Bootstrap estimates of model statistics
+boot_models_stats <- boot_models %>% 
+  bind_rows(.id="name") %>%
+  dplyr::select(name, id, lm_obj) %>%
+  tidyr::separate(name, into=c("mixture_type", "target_subfragment"), sep=";") %>%
+  mutate(model_stats = purrr::map(lm_obj, function(x){
+    fit <- summary(x)
+    tibble(
+      f_stat = fit$fstatistic[1],
+      numdf = fit$fstatistic[2],
+      demdf = fit$fstatistic[3],
+      rsq =fit$r.squared,
+      adj_rsq = fit$adj.r.squared,
+      p_val = lmp(x)
+    )
+    }))%>%
+  unnest_wider(model_stats) %>%
+  drop_na() %>%
+  group_by(mixture_type, target_subfragment) %>% 
+  dplyr::do(rsq = rsample:::pctl_single(.$rsq, alpha = 0.05),
+            adj_rsq = rsample:::pctl_single(.$adj_rsq, alpha = 0.05),
+            f_stat = rsample:::pctl_single(.$f_stat, alpha = 0.05),
+            p_val = rsample:::pctl_single(.$p_val, alpha = 0.05)
+            )  %>%
+  unnest(rsq, adj_rsq, f_stat, p_val, names_sep = "")  %>%
+  mutate(signif = case_when(
+    between(p_val.estimate, 0, 0.001) ~ "***",
+    between(p_val.estimate, 0.001, 0.01) ~ "**",
+    between(p_val.estimate, 0.01, 0.05) ~ "**",
+    TRUE ~ "ns")
+    ) %>%
+  left_join(final_rmse) %>%
+  dplyr::select(-contains("method"), -contains("alpha"))  %>%
+  dplyr::select(pcr_primers = target_subfragment, community_type = mixture_type, r2 = rsq.estimate, adj_r2 = adj_rsq.estimate, rmse = .estimate, fstat = f_stat.estimate , pval = p_val.estimate, signif)
+
+boot_models_stats %>%
+  write_csv("output/results/TableS1_model_fits.csv")
+
+
+# Suplementary table 2, taxon coefficients
+taxon_coef <- boot_coefs  %>%
+    group_by(taxon, target_subfragment, mixture_type) %>%
+    summarise(gm_quantiles(estimate, q = c(0.025, 0.25, 0.75, 0.975), na_rm=TRUE, wide=TRUE),
+              gm_mean = metacal::gm_mean(estimate, na.rm=TRUE),
+              gm_se = metacal::gm_sd(estimate, na.rm = TRUE))  %>%
+  #mutate(gm_mean= log10(gm_mean), gm_se = log10(gm_se)) %>%
+  dplyr::select(taxon, pcr_primers = target_subfragment, community_type = mixture_type, relative_efficiency = gm_mean, se = gm_se)
+
+taxon_coef %>%
+  write_csv("output/results/TableS2_bias_estimates.csv")
 ```
 
 
@@ -1530,13 +1651,20 @@ bias_steps <- boot_partitioned %>%
                names_to = c(".value", "step"),
                names_sep="_") %>%
     group_by(taxon, target_subfragment,extract_type, step) %>%
-    summarise(gm_quantiles(bias, q = c(0.05, 0.25, 0.75, 0.95), na_rm=TRUE, wide=TRUE),
+    summarise(gm_quantiles(bias, q = c(0.025, 0.25, 0.75, 0.975), na_rm=TRUE, wide=TRUE),
               gm_mean = metacal::gm_mean(bias, na.rm=TRUE),
               gm_se = metacal::gm_sd(bias, na.rm = TRUE)) %>%
     ungroup %>%
     rename_with(~gsub("^q", "gm_", .x), starts_with("q"))
 
-library(ggstance)
+# Suplementary table 3, partitioned bias coefficients
+bias_steps %>%
+  dplyr::select(taxon, pcr_primers = target_subfragment, workflow_step = step, workflow_type = extract_type, bias = gm_mean, se = gm_se) %>%
+  pivot_wider(names_from = workflow_step,
+              values_from = c("bias", "se")) %>%
+  dplyr::select(taxon, pcr_primers, workflow_type, bias_all, se_all, bias_extract, se_extract, bias_PCR, se_PCR, bias_postpcr = bias_seq, se_postpcr = se_seq) %>%
+  write_csv("output/results/TableS3_bias_partitioned.csv")
+
 gg.bias_steps <- bias_steps %>%
   dplyr::filter(!(extract_type=="QuickExtract" & !step=="extract")) %>%
   ungroup() %>%
@@ -1550,10 +1678,10 @@ gg.bias_steps <- bias_steps %>%
                   str_replace("seq", "Post-PCR")) %>%
     mutate(taxon = taxon %>% 
            str_replace("_", " ") %>%
-           factor(levels = taxa_order %>% str_replace("_", " "))) %>%
+           factor(levels = rev(names(colours.taxon2)))) %>%
   ggplot(aes(x=gm_mean,y=taxon, shape=extract_type, colour = taxon, fill = taxon)) +
   geom_vline(xintercept = 1, colour="grey80" )  +
-  geom_interval(aes(xmin = gm_05, xmax =gm_95 ), size=2,
+  geom_interval(aes(xmin = gm_025, xmax =gm_975 ), size=2,
       position = position_dodgev(height = 0.8), alpha=0.5) +
   geom_interval(aes(xmin = gm_25, xmax = gm_75 ), size=2,
       position = position_dodgev(height = 0.8), alpha=0.8) +
@@ -1570,7 +1698,8 @@ gg.bias_steps <- bias_steps %>%
         panel.grid.minor.y = element_blank(),
         panel.grid.minor.x = element_blank(),
         axis.text.y = element_text(face ="italic"),
-        axis.text.x = element_text(angle=0, hjust=0.5)) +
+        axis.text.x = element_text(angle=0, hjust=0.5),
+        legend.position = "none") +
       labs(x = "Contribution of laboratory step",
          y = "Efficiency / geometric mean",
          colour = "Taxon",
@@ -1611,7 +1740,7 @@ gg.ra_traj <- ra_traj %>%
   dplyr::filter(extract_type == "DNEasy") %>%
   mutate(taxon = taxon %>% 
        str_replace("_", " ") %>%
-       factor(levels =  rev(taxa_order)  %>% str_replace("_", " "))) %>%
+       factor(levels =  rev(names(colours.taxon2)))) %>%
   #dplyr::filter(!taxon == "Bradysia_nr.ocellaris") %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black" )  +
@@ -1647,7 +1776,7 @@ gg.ra_traj2 <- ra_traj %>%
    ) %>%
     mutate(taxon = taxon %>% 
        str_replace("_", " ") %>%
-       factor(levels = rev(taxa_order) %>% str_replace("_", " "))) %>%
+       factor(levels = rev(names(colours.taxon2)))) %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black")  +
     geom_line() +
@@ -1674,7 +1803,7 @@ gg.ra_traj2 <- ra_traj %>%
         legend.position = "none")
  
 
-Fig2a <- gg.ra_traj + gg.ra_traj2 
+Fig2a <- gg.ra_traj2 + gg.ra_traj
 
 Fig2 <- gg.bias_steps - Fig2a + plot_annotation(tag_levels = "A")
 
@@ -1707,75 +1836,32 @@ model_dat <- boot_partitioned %>%
                names_sep="_") %>%
   dplyr::rename(mixture_type = extract_type)
 
-# Tune 
 lm_mod <- linear_reg(mode = "regression") %>%
     set_engine("lm")
-#lm_mod <- linear_reg(mode = "regression", penalty = tune(), mixture = tune()) %>%
-#set_engine("glmnet")
 
 #create recipe
 lm_rec <- model_dat %>%
-  recipe(bias ~ exoskeleton + biomass_mm3+ surface_mm2 +  primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
+  recipe(bias ~ exoskeleton + biomass_mm3 +  primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
   step_zv(all_numeric(), -all_outcomes()) %>%
   #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
   step_lincomb(all_numeric(), -all_outcomes()) %>%
   step_dummy(all_nominal(), one_hot=TRUE) %>%
   step_normalize(all_numeric(), -all_outcomes())%>%
   step_intercept(value = 0)
-
-extraction_bias_rec <- model_dat %>%
-  recipe(bias ~ exoskeleton + biomass_mm3 + surface_mm2, data=model_dat) %>% #surface_mm2 +
-  step_zv(all_numeric(), -all_outcomes()) %>%
-  #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
-  step_lincomb(all_numeric(), -all_outcomes()) %>%
-  step_dummy(all_nominal(), one_hot=TRUE) %>%
-  step_normalize(all_numeric(), -all_outcomes())%>%
-  step_intercept(value = 0)
-          
-pcr_bias_rec <- model_dat %>%
-  recipe(bias ~ primerdist + `G|C`, data=model_dat) %>% #surface_mm2 +
-  step_zv(all_numeric(), -all_outcomes()) %>%
-  #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
-  step_lincomb(all_numeric(), -all_outcomes()) %>%
-  step_dummy(all_nominal(), one_hot=TRUE) %>%
-  step_normalize(all_numeric(), -all_outcomes())%>%
-  step_intercept(value = 0)
-
-seq_bias_rec <- model_dat %>%
-  recipe(bias ~ `G|C`, data=model_dat) %>% #surface_mm2 +
-  step_zv(all_numeric(), -all_outcomes()) %>%
-  #step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%
-  step_lincomb(all_numeric(), -all_outcomes()) %>%
-  step_dummy(all_nominal(), one_hot=TRUE) %>%
-  step_normalize(all_numeric(), -all_outcomes())%>%
-  step_intercept(value = 0)
-          
 
 partition_boot_fit <- model_dat %>%
+  #filter(id %in% c("Bootstrap0001", "Bootstrap0002","Bootstrap0003")) %>%
+  #drop_na() %>%
   filter(!step == "seq") %>%
-  mutate(recipe_type = step) %>%
-  group_by(step, mixture_type, id)  %>%  #id
+  group_by(step, mixture_type, id)  %>% 
+  #slice_sample(n=5) %>% # For testing only
   nest() %>%
   mutate(models = purrr::map(data, function(y){
-      # fit seperate models
-      if(unique(y$recipe_type) == "all"){
-        model_workflow<- workflow() %>%
-            add_model(lm_mod) %>%
-            add_recipe(lm_rec)
-      } else if(unique(y$recipe_type) == "extract"){
-        model_workflow<- workflow() %>%
-            add_model(lm_mod) %>%
-            add_recipe(extraction_bias_rec)
-      } else if(unique(y$recipe_type) == "PCR"){
-        model_workflow<- workflow() %>%
-            add_model(lm_mod) %>%
-            add_recipe(pcr_bias_rec)
-      } else if(unique(y$recipe_type) == "seq"){
-         model_workflow<- workflow() %>%
-            add_model(lm_mod) %>%
-            add_recipe(seq_bias_rec)
-      }
-         
+      model_workflow<- workflow() %>%
+          add_model(lm_mod) %>%
+          add_recipe(lm_rec)
+      
+      failed <<- y
       #Fit within each bootstrap
       model_workflow %>%
         fit(data = y) %>%
@@ -1783,8 +1869,63 @@ partition_boot_fit <- model_dat %>%
       }),
       coef_info = map(models, tidy)
   ) %>%
-  unnest(coef_info) %>%
-  dplyr::select(!where(is.list)) 
+  unnest(coef_info) #%>%
+ # dplyr::select(!where(is.list)) 
+
+# Write out results to save time
+saveRDS(partition_boot_fit, "output/rds/partition_boot_fit.rds")
+
+# Read back in
+partition_boot_fit <- readRDS("output/rds/partition_boot_fit.rds")
+
+# Model diagnostics
+partition_boot_fit %>%
+  ggplot(aes(x = estimate))+
+  geom_histogram() +
+  facet_grid(step~mixture_type)
+
+# Function to make p values
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
+
+# Bootstrap estimates of model statistics
+model_stats_boot <- partition_boot_fit %>% 
+  dplyr::select(mixture_type, id, step, models) %>%
+  distinct() %>%
+  mutate(model_stats = purrr::map(models, function(x){
+    fit <- summary(extract_fit_engine(x))
+    tibble(
+      f_stat = fit$fstatistic[1],
+      numdf = fit$fstatistic[2],
+      demdf = fit$fstatistic[3],
+      rsq =fit$r.squared,
+      adj_rsq = fit$adj.r.squared,
+      p_val = lmp(extract_fit_engine(x)) 
+    )
+    }))%>%
+  unnest_wider(model_stats) %>%
+  drop_na() %>%
+  group_by(step, mixture_type) %>% 
+  dplyr::do(rsq = rsample:::pctl_single(.$rsq, alpha = 0.05),
+            adj_rsq = rsample:::pctl_single(.$adj_rsq, alpha = 0.05),
+            f_stat = rsample:::pctl_single(.$f_stat, alpha = 0.05),
+            p_val = rsample:::pctl_single(.$p_val, alpha = 0.05)
+            #,
+            #numdf = unique(numdf),
+            #demdf = unique(demdf)
+            )  %>%
+  unnest(rsq, adj_rsq, f_stat, p_val, names_sep = "")  %>%
+  dplyr::select(-contains("method"), -contains("alpha"))  %>%
+  mutate(signif = case_when(
+    p_val.estimate < 0.05 ~ TRUE,
+    TRUE ~ FALSE)
+    )
+
 
 partition_boot_pctl <- partition_boot_fit %>% 
   drop_na() %>%
@@ -1793,92 +1934,6 @@ partition_boot_pctl <- partition_boot_fit %>%
   dplyr::ungroup()
 
 gg.bias_traits <- partition_boot_pctl %>%
-  filter(!(term == "(Intercept)" & step == "PCR")) %>% 
-  dplyr::mutate(term = term %>%
-                  #str_replace("\\(Intercept\\)", "GC%") %>%
-                  str_replace("\\(Intercept\\)", "Medium exoskeleton") %>%
-                  str_replace("exoskeleton_hard", "Hard exoskeleton") %>%
-                  str_replace("exoskeleton_soft", "Soft exoskeleton") %>%
-                  str_replace("`G\\|C`", "GC%") %>%
-                  str_replace("primerdist", "Primer mismatch") %>%
-                  str_replace("biomass_mm3", "Biomass") %>%
-                  str_replace("surface_mm2", "Surface Area") %>%
-                  factor(levels = rev(c(
-                    "Biomass",
-                    "Surface Area",
-                    "Soft exoskeleton",
-                    "Medium exoskeleton",
-                    "Hard exoskeleton",
-                    "Primer mismatch",
-                    "GC%")))) %>%
-  mutate(step = step %>% 
-           str_replace("all", "Total protocol bias") %>%
-           str_replace("extract", "Extraction bias") %>%
-           str_replace("PCR", "PCR bias") %>%
-           str_replace("seq", "Sequencing + onward bias") %>%
-           factor(levels = c(
-             "Total protocol bias",
-             "Extraction bias",
-             "PCR bias",
-             "Sequencing + onward bias"
-             ))) %>%
-  ggplot(aes(x=term, y=.estimate, colour=estimate)) + 
-  geom_hline(yintercept = 0, colour="grey40")+
-  #stat_interval(aes(color_ramp  = stat(level)), colour = "skyblue")+
-  geom_pointrange(aes(ymax = .upper, ymin=.lower), colour = "skyblue")+
-  #geom_interval(aes(ymax = estimate+std.error, ymin=estimate-std.error), colour = "skyblue") +
-  #stat_summary(fun = mean, size=0.2, colour="black")+
-  facet_grid(mixture_type~step) + #, scales="free_x"
-  coord_flip()+
-  scale_color_viridis_c(option = "D")+
-  scale_y_continuous(trans=pseudo_log_trans(1), breaks=c(-50, -15, -5, -1, 
-                                                           1, 5, 15, 50))+
-  #scale_color_distiller(palette="RdYlBu")+
-  base_theme +
-  theme(#panel.grid.major.y = element_blank(),
-        panel.grid.minor.y = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        axis.text.x = element_text(angle  = 0, hjust = 0.5),
-        axis.ticks  = element_line(colour = "grey20"),
-        #panel.border = element_blank(),
-        legend.position = "none") + 
-  labs(x = "Trait",
-       y = "Regression coefficient")
-
-gg.bias_traits
-
-#Save figure
-pdf(file="figs/fig3_trait_effects.pdf", width = 8, height = 5)
-  plot(gg.bias_traits)
-try(dev.off(), silent=TRUE)
-  
-# Option with all models fit
-  
-partition_boot_fit2 <- model_dat %>%
-    filter(!step == "seq") %>%
-  group_by(step, mixture_type, id)  %>% 
-  nest() %>%
-  mutate(models = purrr::map(data, function(y){
-      model_workflow<- workflow() %>%
-          add_model(lm_mod) %>%
-          add_recipe(lm_rec)
-      #Fit within each bootstrap
-      model_workflow %>%
-        fit(data = y) %>%
-        extract_fit_parsnip()  
-      }),
-      coef_info = map(models, tidy)
-  ) %>%
-  unnest(coef_info) %>%
-  dplyr::select(!where(is.list)) 
-
-partition_boot_pctl2 <- partition_boot_fit2 %>% 
-  drop_na() %>%
-  group_by(term, step, mixture_type) %>% 
-  dplyr::do(rsample:::pctl_single(.$estimate, alpha = 0.05)) %>%
-  dplyr::ungroup()
-
-gg.bias_traits2 <- partition_boot_pctl2 %>%
   drop_na() %>%
   dplyr::mutate(term = term %>%
                   #str_replace("\\(Intercept\\)", "GC%") %>%
@@ -1931,11 +1986,10 @@ gg.bias_traits2 <- partition_boot_pctl2 %>%
   labs(x = "Trait",
        y = "Regression coefficient")
 
-gg.bias_traits2
+gg.bias_traits
 
 #Save figure
 pdf(file="figs/fig3_trait_effects_allmodels.pdf", width = 8, height = 5)
-  plot(gg.bias_traits2)
+  plot(gg.bias_traits)
 try(dev.off(), silent=TRUE)
-  
 ```
