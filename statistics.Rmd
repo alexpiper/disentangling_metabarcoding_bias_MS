@@ -1740,7 +1740,7 @@ gg.ra_traj <- ra_traj %>%
   dplyr::filter(extract_type == "DNEasy") %>%
   mutate(taxon = taxon %>% 
        str_replace("_", " ") %>%
-       factor(levels =  rev(names(colours.taxon2)))) %>%
+       factor(levels =  names(colours.taxon2))) %>%
   #dplyr::filter(!taxon == "Bradysia_nr.ocellaris") %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black" )  +
@@ -1776,7 +1776,7 @@ gg.ra_traj2 <- ra_traj %>%
    ) %>%
     mutate(taxon = taxon %>% 
        str_replace("_", " ") %>%
-       factor(levels = rev(names(colours.taxon2)))) %>%
+       factor(levels = names(colours.taxon2))) %>%
     ggplot(aes(x = position, y= RA, color = taxon, group=extract_type, shape=extract_type, fill=taxon)) +
     geom_hline(yintercept = 1, colour="black")  +
     geom_line() +
@@ -1803,15 +1803,15 @@ gg.ra_traj2 <- ra_traj %>%
         legend.position = "none")
  
 
-Fig2a <- gg.ra_traj2 + gg.ra_traj
+Fig4a <- gg.ra_traj2 + gg.ra_traj
 
-Fig2 <- gg.bias_steps - Fig2a + plot_annotation(tag_levels = "A")
+Fig4 <- gg.bias_steps - Fig4a + plot_annotation(tag_levels = "A")
 
-Fig2
+Fig4
 
 #Save figure
-pdf(file="figs/fig2_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
-  plot(Fig2)
+pdf(file="figs/Fig4_bias_partitioned.pdf", width = 11, height = 8 , paper="a4r")
+  plot(Fig4)
 try(dev.off(), silent=TRUE)
 
 ```
@@ -1989,7 +1989,7 @@ gg.bias_traits <- partition_boot_pctl %>%
 gg.bias_traits
 
 #Save figure
-pdf(file="figs/fig3_trait_effects_allmodels.pdf", width = 8, height = 5)
+pdf(file="figs/Fig5_trait_effects_allmodels.pdf", width = 8, height = 5)
   plot(gg.bias_traits)
 try(dev.off(), silent=TRUE)
 ```
